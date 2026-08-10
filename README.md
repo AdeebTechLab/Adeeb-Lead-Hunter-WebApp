@@ -1,4 +1,4 @@
-# AI Lead Hunter
+# Adeeb Lead Hunter
 
 Production-oriented AI sales-intelligence and CRM platform for discovering, qualifying, auditing and managing business leads in Pakistan.
 
