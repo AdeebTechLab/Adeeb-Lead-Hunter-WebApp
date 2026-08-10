@@ -1,0 +1,60 @@
+services:
+  - type: web
+    name: ai-lead-hunter-api
+    runtime: python
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT --proxy-headers
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: ENVIRONMENT
+        value: production
+      - key: SECRET_KEY
+        generateValue: true
+      - key: ENABLE_API_DOCS
+        value: false
+      - key: MONGODB_URI
+        sync: false
+      - key: MONGODB_DB
+        value: ai_lead_hunter
+      - key: FRONTEND_ORIGINS
+        sync: false
+      - key: ALLOW_PUBLIC_SIGNUP
+        value: true
+      - key: DEFAULT_ADMIN_NAME
+        value: Admin User
+      - key: DEFAULT_ADMIN_EMAIL
+        value: admin@example.com
+      - key: DEFAULT_ADMIN_PASSWORD
+        sync: false
+      - key: DEFAULT_ADMIN_CNIC
+        sync: false
+      - key: DEFAULT_ADMIN_CITY
+        value: Islamabad
+      - key: CLOUDINARY_CLOUD_NAME
+        sync: false
+      - key: CLOUDINARY_API_KEY
+        sync: false
+      - key: CLOUDINARY_API_SECRET
+        sync: false
+      - key: CLOUDINARY_PROFILE_FOLDER
+        value: ai-lead-hunter/profiles
+      - key: GEOAPIFY_API_KEY
+        sync: false
+      - key: ENABLE_WEBSITE_CONTACT_ENRICHMENT
+        value: true
+      - key: WEBSITE_CONTACT_ENRICHMENT_LIMIT
+        value: 10
+      - key: PUBLIC_DATA_USER_AGENT
+        sync: false
+      - key: PUBLIC_DATA_REFERER
+        sync: false
+      - key: OVERPASS_URLS
+        value: https://overpass-api.de/api/interpreter,https://overpass.kumi.systems/api/interpreter,https://overpass.nchc.org.tw/api/interpreter
+      - key: PROVIDER_RETRY_ATTEMPTS
+        value: 2
+      - key: PROVIDER_TIMEOUT_SECONDS
+        value: 35
+      - key: PROVIDER_CACHE_TTL_SECONDS
+        value: 900
