@@ -7,6 +7,7 @@ import EmptyState from '../components/EmptyState'
 import LeadDrawer from '../components/LeadDrawer'
 import Loader from '../components/Loader'
 import StatusBadge from '../components/StatusBadge'
+import { useAuth } from '../contexts/AuthContext'
 import { useRefresh } from '../contexts/RefreshContext'
 import type { Lead } from '../types'
 
@@ -31,6 +32,7 @@ export default function LeadsPage() {
   const [filters, setFilters] = useState({ q: '', city: '', category: '', priority: searchParams.get('priority') || '', status: '', service: '', website: '', social: '', contact: '', min_score: '0', sort_by: 'lead_score', sort_order: 'desc' })
   const [page, setPage] = useState(1)
   const { refreshKey } = useRefresh()
+  const { user } = useAuth()
 
   const query = useMemo(() => {
     const params = new URLSearchParams({ page: String(page), page_size: '20', ...filters })
@@ -68,7 +70,7 @@ export default function LeadsPage() {
           <select aria-label="City" value={filters.city} onChange={(e) => setFilters({ ...filters, city: e.target.value })}><option value="">All cities</option>{options.cities.map((item) => <option key={item}>{item}</option>)}</select>
           <select aria-label="Category" value={filters.category} onChange={(e) => setFilters({ ...filters, category: e.target.value })}><option value="">All categories</option>{options.categories.map((item) => <option key={item}>{item}</option>)}</select>
           <select aria-label="Priority" value={filters.priority} onChange={(e) => setFilters({ ...filters, priority: e.target.value })}><option value="">All priorities</option><option>Hot</option><option>Warm</option><option>Cold</option></select>
-          <select aria-label="Status" value={filters.status} onChange={(e) => setFilters({ ...filters, status: e.target.value })}><option value="">All statuses</option><option>Not Contacted</option><option>Contacted</option><option>Follow-up</option><option>Closed</option></select>
+          <select aria-label="Status" value={filters.status} onChange={(e) => setFilters({ ...filters, status: e.target.value })}><option value="">All statuses</option><option>Not Contacted</option><option>Contacted</option><option>Follow-up</option><option>Cancel</option><option>Completed</option></select>
           <select aria-label="Service" value={filters.service} onChange={(e) => setFilters({ ...filters, service: e.target.value })}><option value="">All services</option>{options.services.map((item) => <option key={item}>{item}</option>)}</select>
           <select aria-label="Website" value={filters.website} onChange={(e) => setFilters({ ...filters, website: e.target.value })}><option value="">Any website</option><option value="available">Website available</option><option value="missing">Website missing</option></select>
           <select aria-label="Social" value={filters.social} onChange={(e) => setFilters({ ...filters, social: e.target.value })}><option value="">Any social</option><option value="available">Social available</option><option value="missing">Social missing</option></select>
@@ -92,11 +94,12 @@ export default function LeadsPage() {
           <>
             <div className="table-wrap">
               <table className="qualified-table">
-                <thead><tr><th>Business</th><th>City</th><th>Contact</th><th>Website</th><th>Score</th><th>Service</th><th>Status</th></tr></thead>
+                <thead><tr><th>Business</th><th>City</th>{user?.role === 'admin' && <th>Created by</th>}<th>Contact</th><th>Website</th><th>Score</th><th>Service</th><th>Status</th></tr></thead>
                 <tbody>{data.items.map((lead) => (
                   <tr key={lead.id} onClick={() => navigate(`/leads/${lead.id}`)}>
                     <td><strong>{lead.business_name}</strong><span>{lead.category}</span></td>
                     <td>{lead.city}</td>
+                    {user?.role === 'admin' && <td>{lead.created_by_name || 'Former user'}</td>}
                     <td>
                       <div className="table-contact">
                         <strong>{lead.phone || lead.email || 'Not published'}</strong>

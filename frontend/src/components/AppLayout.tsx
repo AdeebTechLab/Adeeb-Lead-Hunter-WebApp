@@ -1,5 +1,4 @@
 import {
-  Activity,
   Bell,
   Bot,
   ChartNoAxesCombined,
@@ -34,16 +33,14 @@ const navItems: NavItem[] = [
   { label: 'Saved Lists', path: '/lists', icon: FolderKanban },
   { label: 'CRM Pipeline', path: '/crm', icon: Workflow },
   { label: 'Analytics', path: '/analytics', icon: ChartNoAxesCombined },
-  { label: 'Activity Logs', path: '/activity', icon: Activity, badge: true },
   { label: 'Notifications', path: '/notifications', icon: Bell, badge: true },
-  { label: 'Team & Roles', path: '/team', icon: Users, admin: true },
+  { label: 'Team', path: '/team', icon: Users, admin: true },
   { label: 'Settings', path: '/settings', icon: Settings },
 ]
 
 function roleLabel(role?: string) {
-  if (role === 'salesperson') return 'User'
   if (!role) return ''
-  return role.charAt(0).toUpperCase() + role.slice(1)
+  return role === 'admin' ? 'Admin' : 'User'
 }
 
 export default function AppLayout() {
@@ -56,9 +53,13 @@ export default function AppLayout() {
   const [unread, setUnread] = useState(0)
 
   useEffect(() => {
-    api<{ unread: number }>('/notifications')
-      .then((data) => setUnread(data.unread))
+    let active = true
+    const loadUnread = () => api<{ unread: number }>('/notifications')
+      .then((data) => { if (active) setUnread(data.unread) })
       .catch(() => undefined)
+    loadUnread()
+    const timer = window.setInterval(loadUnread, 20000)
+    return () => { active = false; window.clearInterval(timer) }
   }, [location.pathname])
 
   useEffect(() => setMobileOpen(false), [location.pathname])
@@ -69,7 +70,7 @@ export default function AppLayout() {
     return navItems.find((item) => item.path === path)?.label || 'Dashboard'
   }, [location.pathname])
 
-  const visibleItems = navItems.filter((item) => !item.admin || user?.role === 'admin' || user?.role === 'manager')
+  const visibleItems = navItems.filter((item) => !item.admin || user?.role === 'admin')
 
   return (
     <div className={`app-shell ${collapsed ? 'sidebar-collapsed' : ''}`}>
@@ -106,6 +107,9 @@ export default function AppLayout() {
             <strong>{user?.name}</strong>
             <span>{roleLabel(user?.role)}</span>
           </div>
+          <button className="icon-button on-dark profile-collapse" onClick={() => setCollapsed((value) => !value)} aria-label="Toggle sidebar" title="Toggle sidebar">
+            <ChevronLeft size={17} />
+          </button>
         </div>
       </aside>
 
@@ -113,7 +117,6 @@ export default function AppLayout() {
         <header className="topbar">
           <div className="topbar-title">
             <button className="icon-button mobile-menu" onClick={() => setMobileOpen(true)} aria-label="Open menu"><Menu size={20} /></button>
-            <button className="icon-button collapse-button" onClick={() => setCollapsed((value) => !value)} aria-label="Toggle sidebar"><ChevronLeft size={18} /></button>
             <div>
               <h1>{pageTitle}</h1>
               <span>Pakistan sales workspace</span>

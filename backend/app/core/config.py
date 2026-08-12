@@ -55,6 +55,15 @@ class Settings(BaseSettings):
     google_places_base_url: str = "https://places.googleapis.com/v1"
     google_contact_enrichment_limit: int = 8
 
+    # Optional free-tier contact enrichment. TomTom is not used for lead discovery;
+    # it only cross-checks Geoapify/OpenStreetMap results for public phone/website data.
+    tomtom_api_key: str = ""
+    tomtom_base_url: str = "https://api.tomtom.com"
+    tomtom_contact_enrichment_limit: int = 12
+    tomtom_contact_match_radius_m: int = 3500
+    tomtom_contact_timeout_seconds: float = 8.0
+    tomtom_contact_cache_ttl_seconds: int = 604800
+
     enable_website_contact_enrichment: bool = True
     website_contact_enrichment_limit: int = 10
     website_contact_timeout_seconds: float = 6.0

@@ -5,15 +5,17 @@ import { api } from '../api'
 import LeadDrawer from '../components/LeadDrawer'
 import Loader from '../components/Loader'
 import StatusBadge from '../components/StatusBadge'
+import { useAuth } from '../contexts/AuthContext'
 import { useRefresh } from '../contexts/RefreshContext'
-import type { Lead } from '../types'
+import type { Lead, LeadStatus } from '../types'
 
-const columns = ['Not Contacted', 'Contacted', 'Follow-up', 'Closed'] as const
+const columns: LeadStatus[] = ['Not Contacted', 'Contacted', 'Follow-up', 'Cancel', 'Completed']
 
 export default function CrmPage() {
   const [leads, setLeads] = useState<Lead[] | null>(null)
   const [selected, setSelected] = useState<string | null>(null)
   const { refreshKey } = useRefresh()
+  const { user } = useAuth()
 
   function load() {
     api<{ items: Lead[] }>('/leads?page_size=100&sort_by=updated_at&sort_order=desc').then((data) => setLeads(data.items)).catch((error) => toast.error(error.message))
@@ -23,18 +25,23 @@ export default function CrmPage() {
 
   return (
     <>
-      <div className="kanban-board">
+      <div className="kanban-board crm-five-columns">
         {columns.map((column) => {
           const items = leads.filter((lead) => lead.status === column)
           return (
-            <section className="kanban-column" key={column}>
+            <section className={`kanban-column stage-${column.toLowerCase().replaceAll(' ', '-')}`} key={column}>
               <div className="kanban-title"><span>{column}</span><em>{items.length}</em></div>
               <div className="kanban-list">
                 {items.map((lead) => (
                   <button className="kanban-card" key={lead.id} onClick={() => setSelected(lead.id || null)}>
                     <div className="kanban-card-top"><StatusBadge value={lead.priority} /><strong>{lead.lead_score}</strong></div>
                     <h3>{lead.business_name}</h3><p>{lead.recommended_service}</p>
-                    <div className="kanban-meta"><span><UserRound size={14} />{lead.assigned_salesperson || 'Unassigned'}</span><span><PhoneCall size={14} />{lead.call_status || 'Pending'}</span>{lead.follow_up_date && <span><CalendarDays size={14} />{lead.follow_up_date}</span>}</div>
+                    <div className="kanban-meta">
+                      {user?.role === 'admin' && <span><UserRound size={14} />Created by {lead.created_by_name || 'Former user'}</span>}
+                      <span><UserRound size={14} />{lead.assigned_salesperson || 'Unassigned'}</span>
+                      <span><PhoneCall size={14} />{lead.call_status || 'Pending'}</span>
+                      {lead.follow_up_date && <span><CalendarDays size={14} />{lead.follow_up_date}</span>}
+                    </div>
                   </button>
                 ))}
               </div>

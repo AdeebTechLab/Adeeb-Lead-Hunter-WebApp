@@ -9,7 +9,7 @@ from app.core.config import settings
 from app.core.database import mongo
 from app.services.seeding import seed_database
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 
 
 @asynccontextmanager

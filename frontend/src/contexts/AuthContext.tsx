@@ -9,6 +9,7 @@ type AuthContextValue = {
   loading: boolean
   login: (email: string, password: string) => Promise<void>
   signup: (form: FormData) => Promise<void>
+  refreshUser: () => Promise<void>
   logout: () => void
 }
 
@@ -51,12 +52,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     await storeAuth(result)
   }
 
+  async function refreshUser() {
+    const current = await api<User>('/auth/me')
+    setUser(current)
+  }
+
   function logout() {
     localStorage.removeItem('leadHunterToken')
     setUser(null)
   }
 
-  return <AuthContext.Provider value={{ user, loading, login, signup, logout }}>{children}</AuthContext.Provider>
+  return <AuthContext.Provider value={{ user, loading, login, signup, refreshUser, logout }}>{children}</AuthContext.Provider>
 }
 
 export function useAuth() {

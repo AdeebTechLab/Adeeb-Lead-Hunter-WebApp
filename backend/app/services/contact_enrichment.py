@@ -15,19 +15,36 @@ from bs4 import BeautifulSoup
 
 from app.core.config import settings
 from app.providers.google_places import google_exact_lookup
+from app.providers.tomtom import tomtom_exact_lookup
 
 PHONE_RE = re.compile(r"(?:(?:\+|00)92[\s().-]*|0)(?:3\d{2}|[2-9]\d{1,3})[\s().-]*\d{3,4}[\s().-]*\d{3,4}")
 EMAIL_RE = re.compile(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", re.I)
 CONTACT_PATH_WORDS = ("contact", "contact-us", "about", "about-us", "reach-us")
 
 
-def google_maps_search_url(item: Dict[str, Any]) -> str:
-    query = ", ".join(
-        part for part in [item.get("business_name"), item.get("address"), item.get("city"), item.get("province"), "Pakistan"] if part
-    )
+def google_maps_verification_url(item: Dict[str, Any]) -> str:
+    """Open Google Maps using the specific business identity.
+
+    Google documents PLACE_NAME,ADDRESS as the recommended no-place-ID format
+    when the goal is to display a specific place's details. Coordinate-only
+    queries intentionally are not used because Google Maps can show only a pin
+    without the business detail panel.
+    """
+    name = str(item.get("business_name") or "").strip()
+    address = str(item.get("address") or "").strip()
+    city = str(item.get("city") or "").strip()
+    province = str(item.get("province") or "").strip()
+
+    # Prefer the exact identity format that previously opened the business
+    # detail card reliably: business name + street/full address.
+    if name and address:
+        query = f"{name}, {address}"
+    else:
+        query = ", ".join(part for part in [name, city, province, "Pakistan"] if part)
+
     return (
         "https://www.google.com/maps/search/?api=1&query="
-        f"{quote_plus(query)}&utm_source=ai_lead_hunter&utm_campaign=lead_contact"
+        f"{quote_plus(query)}&utm_source=adeeb_lead_hunter&utm_campaign=place_details_search"
     )
 
 
@@ -218,11 +235,48 @@ def discover_website_contacts(item: Dict[str, Any]) -> Dict[str, Any]:
         enriched["contact_sources"] = sources
         enriched["contact_confidence"] = "High"
         enriched["contact_status"] = "Contactable" if enriched.get("phone") or enriched.get("email") else "Website available"
-        enriched["contact_discovery"] = {
-            "website_pages_checked": pages_checked,
+        discovery = dict(enriched.get("contact_discovery") or {})
+        discovery["website"] = {
+            "pages_checked": pages_checked,
             "method": "Public business website",
         }
+        enriched["contact_discovery"] = discovery
     return enriched
+
+
+def _merge_tomtom(item: Dict[str, Any], tomtom: Dict[str, Any]) -> Dict[str, Any]:
+    merged = deepcopy(item)
+    for field in ["phone", "website"]:
+        if not merged.get(field) and tomtom.get(field):
+            merged[field] = tomtom.get(field)
+
+    # Keep the original Geoapify/OSM location as the lead identity. TomTom
+    # coordinates/address are used only when the discovery source did not provide them.
+    for field in ["address", "latitude", "longitude"]:
+        if not merged.get(field) and tomtom.get(field) is not None:
+            merged[field] = tomtom.get(field)
+
+    if tomtom.get("phone") or tomtom.get("website"):
+        merged["contact_sources"] = list(dict.fromkeys([*(merged.get("contact_sources") or []), tomtom.get("source") or "TomTom Places Search API"]))
+        if tomtom.get("phone"):
+            merged["contact_status"] = "Contactable"
+            merged["contact_confidence"] = tomtom.get("match_confidence") or "Medium"
+        elif tomtom.get("website") and not merged.get("phone") and not merged.get("email"):
+            merged["contact_status"] = "Website available"
+            merged["contact_confidence"] = tomtom.get("match_confidence") or merged.get("contact_confidence") or "Medium"
+
+        discovery = dict(merged.get("contact_discovery") or {})
+        discovery["tomtom"] = {
+            "matched_name": tomtom.get("matched_name"),
+            "match_confidence": tomtom.get("match_confidence"),
+            "match_score": tomtom.get("match_score"),
+            "name_similarity": tomtom.get("name_similarity"),
+            "distance_m": tomtom.get("distance_m"),
+            "city_match": tomtom.get("city_match"),
+            "method": "Exact POI contact cross-check",
+        }
+        merged["contact_discovery"] = discovery
+    return merged
 
 
 def _merge_google(item: Dict[str, Any], google: Dict[str, Any]) -> Dict[str, Any]:
@@ -243,13 +297,13 @@ def _merge_google(item: Dict[str, Any], google: Dict[str, Any]) -> Dict[str, Any
     merged["contact_sources"] = list(dict.fromkeys([*(merged.get("contact_sources") or []), "Google Places"]))
     merged["contact_confidence"] = "High" if merged.get("phone") else merged.get("contact_confidence") or "Medium"
     merged["contact_status"] = "Contactable" if merged.get("phone") or merged.get("email") else "Website available" if merged.get("website") else "Research needed"
-    merged["contact_search_url"] = merged.get("google_business_url") or google_maps_search_url(merged)
+    merged["contact_search_url"] = merged.get("google_business_url") or google_maps_verification_url(merged)
     return merged
 
 
 def finalise_contact_metadata(item: Dict[str, Any]) -> Dict[str, Any]:
     item = deepcopy(item)
-    item["contact_search_url"] = item.get("contact_search_url") or item.get("google_business_url") or google_maps_search_url(item)
+    item["contact_search_url"] = item.get("google_business_url") or google_maps_verification_url(item)
     sources = list(dict.fromkeys(item.get("contact_sources") or []))
     if (item.get("phone") or item.get("email") or item.get("website")) and not sources:
         sources.append(item.get("source") or "Public listing")
@@ -266,24 +320,73 @@ def finalise_contact_metadata(item: Dict[str, Any]) -> Dict[str, Any]:
     return item
 
 
+def _website_enrichment_indexes(results: List[dict], limit: int, only_uncrawled: bool = False) -> List[int]:
+    indexes: List[int] = []
+    for index, item in enumerate(results):
+        if not item.get("website") or (item.get("phone") and item.get("email")):
+            continue
+        if only_uncrawled and (item.get("contact_discovery") or {}).get("website"):
+            continue
+        indexes.append(index)
+        if len(indexes) >= max(0, limit):
+            break
+    return indexes
+
+
+def _run_website_enrichment(results: List[dict], indexes: List[int]) -> None:
+    if not indexes:
+        return
+    with ThreadPoolExecutor(max_workers=min(4, len(indexes))) as executor:
+        futures = {executor.submit(discover_website_contacts, results[index]): index for index in indexes}
+        for future in as_completed(futures):
+            index = futures[future]
+            try:
+                results[index] = finalise_contact_metadata(future.result())
+            except Exception:
+                continue
+
+
 def enrich_search_items(items: List[dict], provider: str) -> tuple[List[dict], List[str]]:
     results = [finalise_contact_metadata(item) for item in items]
     warnings: List[str] = []
 
+    # First use a website already supplied by Geoapify/OpenStreetMap. This can reveal
+    # public email/phone/social links without consuming another place-API request.
     if settings.enable_website_contact_enrichment:
-        indexes = [index for index, item in enumerate(results) if item.get("website") and not (item.get("phone") and item.get("email"))]
-        indexes = indexes[: max(0, settings.website_contact_enrichment_limit)]
-        if indexes:
-            with ThreadPoolExecutor(max_workers=min(4, len(indexes))) as executor:
-                futures = {executor.submit(discover_website_contacts, results[index]): index for index in indexes}
-                for future in as_completed(futures):
-                    index = futures[future]
-                    try:
-                        results[index] = finalise_contact_metadata(future.result())
-                    except Exception:
-                        continue
+        _run_website_enrichment(
+            results,
+            _website_enrichment_indexes(results, settings.website_contact_enrichment_limit),
+        )
 
-    # Google is never scraped. When configured, use the official Places API only.
+    # TomTom is an optional free-tier enrichment layer only. The original discovery
+    # provider remains Geoapify/OpenStreetMap, and a TomTom result is accepted only
+    # when strict name + city/coordinate checks identify the same business.
+    tomtom_checked = 0
+    tomtom_matched = 0
+    if settings.tomtom_api_key:
+        for index, item in enumerate(results):
+            if tomtom_checked >= max(0, settings.tomtom_contact_enrichment_limit):
+                break
+            if item.get("phone") and item.get("website"):
+                continue
+            tomtom_checked += 1
+            try:
+                match = tomtom_exact_lookup(item)
+            except Exception:
+                match = None
+            if match:
+                results[index] = finalise_contact_metadata(_merge_tomtom(item, match))
+                tomtom_matched += 1
+
+        # A TomTom match can supply the official website. Crawl that site once to
+        # find an email or a more authoritative phone number from the business itself.
+        if settings.enable_website_contact_enrichment and tomtom_matched:
+            _run_website_enrichment(
+                results,
+                _website_enrichment_indexes(results, settings.website_contact_enrichment_limit, only_uncrawled=True),
+            )
+    # Google support remains optional and official-only. It is not required for the
+    # free deployment path and is skipped completely when no key is configured.
     if settings.google_places_api_key and provider != "google":
         lookups = 0
         for index, item in enumerate(results):
@@ -305,21 +408,43 @@ def enrich_search_items(items: List[dict], provider: str) -> tuple[List[dict], L
                 results[index] = _merge_google(item, google)
         if lookups:
             warnings.append("Missing contacts were checked against the official Google Places API where an accurate match was found.")
-    elif any(not item.get("phone") for item in results):
-        warnings.append("Some businesses do not publish a phone number in the connected sources. Use the Google Maps button to review the listing, or configure Google Places API for automated contact enrichment.")
 
-    return [finalise_contact_metadata(item) for item in results], warnings
+    if any(not (item.get("phone") or item.get("email")) for item in results):
+        if settings.tomtom_api_key:
+            warnings.append("Some businesses still do not publish a verifiable phone or email in the connected public sources. Maps remains available only for manual verification; no contact is invented.")
+        else:
+            warnings.append("Add a free TomTom Places Search API key to cross-check missing phone numbers and official websites while keeping Geoapify/OpenStreetMap as the lead sources.")
+
+    return [finalise_contact_metadata(item) for item in results], list(dict.fromkeys(warnings))
 
 
 def enrich_single_lead(item: Dict[str, Any]) -> tuple[Dict[str, Any], List[str]]:
     enriched = finalise_contact_metadata(item)
     notes: List[str] = []
+
     if settings.enable_website_contact_enrichment and enriched.get("website"):
         before = (enriched.get("phone"), enriched.get("email"), enriched.get("facebook"), enriched.get("instagram"), enriched.get("linkedin"))
         enriched = finalise_contact_metadata(discover_website_contacts(enriched))
         after = (enriched.get("phone"), enriched.get("email"), enriched.get("facebook"), enriched.get("instagram"), enriched.get("linkedin"))
         if after != before:
             notes.append("New public contact details were found on the business website.")
+
+    if settings.tomtom_api_key and not (enriched.get("phone") and enriched.get("website")):
+        try:
+            tomtom = tomtom_exact_lookup(enriched)
+        except Exception:
+            tomtom = None
+        if tomtom:
+            had_website = bool(enriched.get("website"))
+            enriched = finalise_contact_metadata(_merge_tomtom(enriched, tomtom))
+            notes.append("TomTom Places Search returned a high-confidence match for this same business and supplied public contact metadata.")
+            if settings.enable_website_contact_enrichment and enriched.get("website") and not had_website:
+                before = (enriched.get("phone"), enriched.get("email"), enriched.get("facebook"), enriched.get("instagram"), enriched.get("linkedin"))
+                enriched = finalise_contact_metadata(discover_website_contacts(enriched))
+                after = (enriched.get("phone"), enriched.get("email"), enriched.get("facebook"), enriched.get("instagram"), enriched.get("linkedin"))
+                if after != before:
+                    notes.append("The matched official website was checked for public phone, email and social links.")
+
     if settings.google_places_api_key and not enriched.get("phone"):
         try:
             google = google_exact_lookup(
@@ -333,6 +458,7 @@ def enrich_single_lead(item: Dict[str, Any]) -> tuple[Dict[str, Any], List[str]]
         if google:
             enriched = _merge_google(enriched, google)
             notes.append("The official Google Places API matched and enriched this business.")
+
     if not enriched.get("phone") and not enriched.get("email"):
-        notes.append("No verified direct contact was published by the connected sources. Use the Google Maps review link and verify before outreach.")
+        notes.append("No verified direct contact was published by the connected sources. Maps is kept only as a manual verification option; the system does not invent a number or email.")
     return finalise_contact_metadata(enriched), notes

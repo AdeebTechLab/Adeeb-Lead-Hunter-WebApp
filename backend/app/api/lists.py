@@ -1,10 +1,10 @@
 from datetime import datetime, timezone
 
-from app.core.objectid import ObjectId
 from fastapi import APIRouter, Depends, HTTPException
 
 from app.core.database import mongo
 from app.core.dependencies import get_current_user
+from app.core.objectid import ObjectId
 from app.core.serializers import serialize_doc
 from app.models import LeadListCreateRequest, LeadListMemberRequest, LeadListUpdateRequest
 from app.services.activity import log_activity
@@ -21,10 +21,15 @@ def _list_or_404(list_id: str, user: dict) -> dict:
     return item
 
 
-def _serialize_list(item: dict) -> dict:
+def _lead_scope(user: dict) -> dict:
+    return {} if user.get("role") == "admin" else {"created_by": user["_id"]}
+
+
+def _serialize_list(item: dict, user: dict) -> dict:
     result = serialize_doc(item)
     ids = item.get("lead_ids", [])
-    leads = [serialize_doc(lead) for lead in mongo.db.leads.find({"_id": {"$in": ids}}).sort("lead_score", -1)] if ids else []
+    query = {"_id": {"$in": ids}, **_lead_scope(user)} if ids else {"_id": {"$in": []}}
+    leads = [serialize_doc(lead) for lead in mongo.db.leads.find(query).sort("lead_score", -1)] if ids else []
     result["lead_count"] = len(leads)
     result["leads"] = leads
     return result
@@ -32,7 +37,7 @@ def _serialize_list(item: dict) -> dict:
 
 @router.get("")
 def list_saved_lists(user: dict = Depends(get_current_user)):
-    items = [_serialize_list(item) for item in mongo.db.lead_lists.find({"created_by": user["_id"]}).sort("updated_at", -1)]
+    items = [_serialize_list(item, user) for item in mongo.db.lead_lists.find({"created_by": user["_id"]}).sort("updated_at", -1)]
     return {"items": items}
 
 
@@ -49,7 +54,7 @@ def create_saved_list(payload: LeadListCreateRequest, user: dict = Depends(get_c
     }
     item["_id"] = mongo.db.lead_lists.insert_one(item).inserted_id
     log_activity(user, "Created", "Lead list", str(item["_id"]), item["name"])
-    return _serialize_list(item)
+    return _serialize_list(item, user)
 
 
 @router.patch("/{list_id}")
@@ -58,7 +63,7 @@ def update_saved_list(list_id: str, payload: LeadListUpdateRequest, user: dict =
     changes = payload.model_dump(exclude_unset=True)
     changes["updated_at"] = datetime.now(timezone.utc)
     mongo.db.lead_lists.update_one({"_id": item["_id"]}, {"$set": changes})
-    return _serialize_list(mongo.db.lead_lists.find_one({"_id": item["_id"]}))
+    return _serialize_list(mongo.db.lead_lists.find_one({"_id": item["_id"]}), user)
 
 
 @router.post("/{list_id}/leads")
@@ -67,14 +72,14 @@ def add_to_saved_list(list_id: str, payload: LeadListMemberRequest, user: dict =
     if not ObjectId.is_valid(payload.lead_id):
         raise HTTPException(status_code=404, detail="Lead not found")
     lead_id = ObjectId(payload.lead_id)
-    if not mongo.db.leads.find_one({"_id": lead_id}):
+    if not mongo.db.leads.find_one({"_id": lead_id, **_lead_scope(user)}):
         raise HTTPException(status_code=404, detail="Lead not found")
     ids = item.get("lead_ids", [])
     if lead_id not in ids:
         ids.append(lead_id)
         mongo.db.lead_lists.update_one({"_id": item["_id"]}, {"$set": {"lead_ids": ids, "updated_at": datetime.now(timezone.utc)}})
         log_activity(user, "Added", "Lead list", list_id, payload.lead_id)
-    return _serialize_list(mongo.db.lead_lists.find_one({"_id": item["_id"]}))
+    return _serialize_list(mongo.db.lead_lists.find_one({"_id": item["_id"]}), user)
 
 
 @router.delete("/{list_id}/leads/{lead_id}")
@@ -83,7 +88,7 @@ def remove_from_saved_list(list_id: str, lead_id: str, user: dict = Depends(get_
     ids = [value for value in item.get("lead_ids", []) if str(value) != lead_id]
     mongo.db.lead_lists.update_one({"_id": item["_id"]}, {"$set": {"lead_ids": ids, "updated_at": datetime.now(timezone.utc)}})
     log_activity(user, "Removed", "Lead list", list_id, lead_id)
-    return _serialize_list(mongo.db.lead_lists.find_one({"_id": item["_id"]}))
+    return _serialize_list(mongo.db.lead_lists.find_one({"_id": item["_id"]}), user)
 
 
 @router.delete("/{list_id}")

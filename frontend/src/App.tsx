@@ -2,7 +2,6 @@ import { Navigate, Route, Routes } from 'react-router-dom'
 import AppLayout from './components/AppLayout'
 import Loader from './components/Loader'
 import { useAuth } from './contexts/AuthContext'
-import ActivityPage from './pages/ActivityPage'
 import AnalyticsPage from './pages/AnalyticsPage'
 import AuthPage from './pages/AuthPage'
 import CrmPage from './pages/CrmPage'
@@ -35,7 +34,6 @@ export default function App() {
         <Route path="/lists" element={<SavedListsPage />} />
         <Route path="/crm" element={<CrmPage />} />
         <Route path="/analytics" element={<AnalyticsPage />} />
-        <Route path="/activity" element={<ActivityPage />} />
         <Route path="/notifications" element={<NotificationsPage />} />
         <Route path="/team" element={<TeamPage />} />
         <Route path="/settings" element={<SettingsPage />} />

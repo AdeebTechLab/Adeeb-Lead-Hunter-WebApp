@@ -19,10 +19,10 @@ from app.core.serializers import serialize_doc
 from app.models import BulkImportRequest, LeadCreateRequest, LeadUpdateRequest, SearchRequest
 from app.providers import provider_status, search_public_businesses
 from app.providers.common import ProviderError
-from app.services.activity import create_notification, log_activity
+from app.services.activity import create_admin_notification, create_notification, log_activity
 from app.services.audit import UnsafeURL, audit_website
 from app.services.contact_enrichment import enrich_single_lead, finalise_contact_metadata
-from app.services.dedupe import make_dedupe_key
+from app.services.dedupe import make_dedupe_key, make_identity_keys
 from app.services.scoring import (
     build_outreach,
     build_score_breakdown,
@@ -34,13 +34,26 @@ from app.services.scoring import (
 router = APIRouter(prefix="/leads", tags=["Leads"])
 
 
-def _lead_or_404(lead_id: str) -> dict:
+def _scope_for_user(user: dict) -> dict:
+    return {} if user.get("role") == "admin" else {"created_by": user["_id"]}
+
+
+def _lead_or_404(lead_id: str, user: dict) -> dict:
     if not ObjectId.is_valid(lead_id):
         raise HTTPException(status_code=404, detail="Lead not found")
-    lead = mongo.db.leads.find_one({"_id": ObjectId(lead_id)})
+    query = {"_id": ObjectId(lead_id), **_scope_for_user(user)}
+    lead = mongo.db.leads.find_one(query)
     if not lead:
         raise HTTPException(status_code=404, detail="Lead not found")
     return lead
+
+
+def _lead_view(lead: dict) -> dict:
+    result = serialize_doc(lead)
+    if not result.get("created_by_name") and lead.get("created_by"):
+        creator = mongo.db.users.find_one({"_id": lead.get("created_by")})
+        result["created_by_name"] = creator.get("name") if creator else "Former user"
+    return result
 
 
 def _score_fields(data: dict, audit: dict | None = None) -> dict:
@@ -64,6 +77,7 @@ def _prepare_lead(data: dict, user: dict) -> dict:
     data.update(
         {
             "dedupe_key": make_dedupe_key(data),
+            "dedupe_aliases": make_identity_keys(data),
             "audit": data.get("audit", {}),
             "status": data.get("status", "Not Contacted"),
             "notes": data.get("notes", ""),
@@ -75,6 +89,8 @@ def _prepare_lead(data: dict, user: dict) -> dict:
             "deal_status": data.get("deal_status", "Open"),
             "meeting_notes": data.get("meeting_notes", ""),
             "created_by": user["_id"],
+            "created_by_name": user.get("name", "User"),
+            "created_by_email": user.get("email", ""),
             "created_at": now,
             "updated_at": now,
         }
@@ -137,9 +153,43 @@ def search_leads(payload: SearchRequest, user: dict = Depends(get_current_user))
             detail="Live business search could not complete. Automatic retries were attempted. Check the API configuration and try again.",
         ) from exc
 
+    # Leads already present in the qualified database are hidden from future searches.
+    # The same production dedupe key used by MongoDB is used here, so search/import stay consistent.
+    normalised_items = []
+    all_candidate_keys: set[str] = set()
+    seen_candidate_keys: set[str] = set()
+    for raw_item in result["items"]:
+        item = finalise_contact_metadata(raw_item)
+        identity_keys = make_identity_keys(item)
+        if not identity_keys:
+            identity_keys = [make_dedupe_key(item)]
+        if seen_candidate_keys.intersection(identity_keys):
+            continue
+        seen_candidate_keys.update(identity_keys)
+        all_candidate_keys.update(identity_keys)
+        item["_identity_keys"] = identity_keys
+        normalised_items.append(item)
+
+    existing_keys: set[str] = set()
+    if all_candidate_keys:
+        existing_docs = mongo.db.leads.find({
+            "$or": [
+                {"dedupe_key": {"$in": list(all_candidate_keys)}},
+                {"dedupe_aliases": {"$in": list(all_candidate_keys)}},
+            ]
+        })
+        for doc in existing_docs:
+            if doc.get("dedupe_key"):
+                existing_keys.add(doc["dedupe_key"])
+            existing_keys.update(doc.get("dedupe_aliases") or [])
+
     prepared = []
-    for item in result["items"]:
-        item = finalise_contact_metadata(item)
+    excluded_existing = 0
+    for item in normalised_items:
+        identity_keys = item.pop("_identity_keys", [])
+        if existing_keys.intersection(identity_keys):
+            excluded_existing += 1
+            continue
         item.update(_score_fields(item))
         prepared.append(item)
 
@@ -154,6 +204,7 @@ def search_leads(payload: SearchRequest, user: dict = Depends(get_current_user))
     return {
         "items": prepared,
         "count": len(prepared),
+        "excluded_existing": excluded_existing,
         "provider": used_provider,
         "cached": bool(result.get("cached")),
         "attribution": result.get("attribution"),
@@ -167,13 +218,15 @@ def create_lead(payload: LeadCreateRequest, user: dict = Depends(get_current_use
     lead = _prepare_lead(payload.model_dump(), user)
     try:
         result = mongo.db.leads.insert_one(lead)
-    except DuplicateKeyError:
-        raise HTTPException(status_code=409, detail="This lead already exists")
+    except Exception as exc:
+        if is_duplicate_key_error(exc):
+            raise HTTPException(status_code=409, detail="This lead already exists") from exc
+        raise
     lead["_id"] = result.inserted_id
     log_activity(user, "Created", "Lead", str(result.inserted_id), lead["business_name"])
     if lead["priority"] == "Hot":
         create_notification("Hot lead added", lead["business_name"], "lead", user["_id"], f"/leads/{result.inserted_id}")
-    return serialize_doc(lead)
+    return _lead_view(lead)
 
 
 @router.post("/bulk")
@@ -186,7 +239,7 @@ def bulk_import(payload: BulkImportRequest, user: dict = Depends(get_current_use
         try:
             result = mongo.db.leads.insert_one(lead)
             lead["_id"] = result.inserted_id
-            items.append(serialize_doc(lead))
+            items.append(_lead_view(lead))
             imported += 1
         except Exception as exc:
             if is_duplicate_key_error(exc):
@@ -215,7 +268,7 @@ def list_leads(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
 ):
-    query: dict = {"lead_score": {"$gte": min_score}}
+    query: dict = {**_scope_for_user(user), "lead_score": {"$gte": min_score}}
     clauses = []
     if q:
         clauses.append({"$or": [
@@ -262,7 +315,7 @@ def list_leads(
     order = ASCENDING if sort_order == "asc" else DESCENDING
     cursor = mongo.db.leads.find(query).sort(sort_by if sort_by in allowed_sort else "created_at", order)
     total = mongo.db.leads.count_documents(query)
-    items = [serialize_doc(doc) for doc in cursor.skip((page - 1) * page_size).limit(page_size)]
+    items = [_lead_view(doc) for doc in cursor.skip((page - 1) * page_size).limit(page_size)]
     return {
         "items": items,
         "total": total,
@@ -274,10 +327,11 @@ def list_leads(
 
 @router.get("/options")
 def lead_options(user: dict = Depends(get_current_user)):
+    scoped = list(mongo.db.leads.find(_scope_for_user(user)))
     return {
-        "cities": sorted(item for item in mongo.db.leads.distinct("city") if item),
-        "categories": sorted(item for item in mongo.db.leads.distinct("category") if item),
-        "services": sorted(item for item in mongo.db.leads.distinct("recommended_service") if item),
+        "cities": sorted({item.get("city") for item in scoped if item.get("city")}),
+        "categories": sorted({item.get("category") for item in scoped if item.get("category")}),
+        "services": sorted({item.get("recommended_service") for item in scoped if item.get("recommended_service")}),
     }
 
 
@@ -288,7 +342,7 @@ def export_leads(
     status: Optional[str] = None,
     user: dict = Depends(get_current_user),
 ):
-    query = {}
+    query = _scope_for_user(user)
     if priority:
         query["priority"] = priority
     if status:
@@ -297,7 +351,7 @@ def export_leads(
     fields = [
         "business_name", "category", "city", "province", "phone", "email", "website", "google_business_url",
         "facebook", "instagram", "linkedin", "contact_status", "contact_confidence", "contact_sources",
-        "lead_score", "priority", "recommended_service", "status", "assigned_salesperson", "follow_up_date", "notes",
+        "lead_score", "priority", "recommended_service", "status", "created_by_name", "assigned_salesperson", "follow_up_date", "notes",
     ]
     log_activity(user, "Exported", "Leads", detail=f"{len(leads)} leads as {format.upper()}")
     if format == "xlsx":
@@ -339,15 +393,16 @@ def export_leads(
 
 @router.get("/{lead_id}")
 def get_lead(lead_id: str, user: dict = Depends(get_current_user)):
-    lead = _lead_or_404(lead_id)
-    result = serialize_doc(lead)
+    lead = _lead_or_404(lead_id, user)
+    result = _lead_view(lead)
     # Old records created by previous builds still receive the new display metadata.
     result.setdefault("score_profile", score_profile(int(result.get("lead_score") or 0)))
     result.setdefault("score_breakdown", build_score_breakdown(result, int(result.get("lead_score") or 0)))
     result = finalise_contact_metadata(result)
     competitors = [
-        serialize_doc(item)
+        _lead_view(item)
         for item in mongo.db.leads.find({
+            **_scope_for_user(user),
             "_id": {"$nin": [lead["_id"]]},
             "city": lead.get("city"),
             "category": lead.get("category"),
@@ -359,21 +414,65 @@ def get_lead(lead_id: str, user: dict = Depends(get_current_user)):
 
 @router.patch("/{lead_id}")
 def update_lead(lead_id: str, payload: LeadUpdateRequest, user: dict = Depends(get_current_user)):
-    lead = _lead_or_404(lead_id)
+    lead = _lead_or_404(lead_id, user)
     changes = payload.model_dump(exclude_unset=True)
     for key, value in list(changes.items()):
         if hasattr(value, "isoformat"):
             changes[key] = value.isoformat()
+
+    # Keep the CRM stage and deal outcome consistent.
+    if changes.get("deal_status") == "Won":
+        changes["status"] = "Completed"
+    elif changes.get("deal_status") == "Lost":
+        changes["status"] = "Cancel"
+    if changes.get("status") == "Completed":
+        changes["deal_status"] = "Won"
+    elif changes.get("status") == "Cancel":
+        changes["deal_status"] = "Lost"
+    elif changes.get("status") in {"Not Contacted", "Contacted", "Follow-up"} and lead.get("deal_status") in {"Won", "Lost"}:
+        changes.setdefault("deal_status", "Open")
+
+    if changes.get("status") == "Contacted" and not changes.get("last_contact_date") and not lead.get("last_contact_date"):
+        changes["last_contact_date"] = datetime.now(timezone.utc).date().isoformat()
+
+    workflow_fields = ["status", "call_status", "proposal_status", "deal_status"]
+    workflow_changes = {
+        key: value for key, value in changes.items()
+        if key in workflow_fields and value != lead.get(key)
+    }
+
     changes["updated_at"] = datetime.now(timezone.utc)
     mongo.db.leads.update_one({"_id": lead["_id"]}, {"$set": changes})
     updated = mongo.db.leads.find_one({"_id": lead["_id"]})
     log_activity(user, "Updated", "Lead", lead_id, ", ".join(key for key in changes if key != "updated_at"))
-    return serialize_doc(updated)
+
+    if user.get("role") == "user" and workflow_changes:
+        if workflow_changes.get("status") == "Completed" or workflow_changes.get("deal_status") == "Won":
+            title = "Deal completed"
+            kind = "completed"
+        elif workflow_changes.get("status") == "Cancel" or workflow_changes.get("deal_status") == "Lost":
+            title = "Deal cancelled"
+            kind = "cancelled"
+        elif workflow_changes.get("status") == "Contacted" or workflow_changes.get("call_status") == "Connected":
+            title = "Lead contacted"
+            kind = "contact"
+        else:
+            title = "Lead workflow updated"
+            kind = "followup"
+        detail = " · ".join(f"{key.replace('_', ' ').title()}: {value}" for key, value in workflow_changes.items())
+        create_admin_notification(
+            title,
+            f"{user.get('name', 'A user')} updated {lead.get('business_name', 'a lead')}. {detail}",
+            kind,
+            f"/leads/{lead_id}",
+        )
+
+    return _lead_view(updated)
 
 
 @router.post("/{lead_id}/enrich-contact")
 def enrich_contact(lead_id: str, user: dict = Depends(get_current_user)):
-    lead = _lead_or_404(lead_id)
+    lead = _lead_or_404(lead_id, user)
     enriched, notes = enrich_single_lead(lead)
     score_fields = _score_fields(enriched, enriched.get("audit") or None)
     update = {
@@ -383,17 +482,18 @@ def enrich_contact(lead_id: str, user: dict = Depends(get_current_user)):
             "contact_status", "contact_search_url", "contact_discovery",
         ]},
         **score_fields,
+        "dedupe_aliases": make_identity_keys(enriched),
         "updated_at": datetime.now(timezone.utc),
     }
     mongo.db.leads.update_one({"_id": lead["_id"]}, {"$set": update})
     updated = mongo.db.leads.find_one({"_id": lead["_id"]})
     log_activity(user, "Enriched", "Lead contact", lead_id, lead["business_name"])
-    return {"lead": serialize_doc(updated), "notes": notes}
+    return {"lead": _lead_view(updated), "notes": notes}
 
 
 @router.post("/{lead_id}/audit")
 def run_audit(lead_id: str, user: dict = Depends(get_current_user)):
-    lead = _lead_or_404(lead_id)
+    lead = _lead_or_404(lead_id, user)
     enriched, enrichment_notes = enrich_single_lead(lead)
     lead.update(enriched)
 
@@ -437,6 +537,7 @@ def run_audit(lead_id: str, user: dict = Depends(get_current_user)):
     update = {
         "audit": audit,
         **score_fields,
+        "dedupe_aliases": make_identity_keys(lead),
         **{key: lead.get(key) for key in [
             "phone", "email", "website", "google_business_url", "google_place_id", "facebook", "instagram", "linkedin",
             "address", "latitude", "longitude", "rating", "reviews_count", "contact_sources", "contact_confidence",

@@ -134,6 +134,7 @@ export default function LeadDrawer({ leadId, onClose, onChanged }: { leadId: str
                   <div className="info-grid">
                     <div><span>City</span><strong>{lead.city}</strong></div>
                     <div><span>Status</span><StatusBadge value={lead.status} /></div>
+                    <div><span>Created by</span><strong>{lead.created_by_name || 'Former user'}</strong></div>
                     <div><span>Phone</span><strong>{lead.phone || 'Not published'}</strong></div>
                     <div><span>Email</span><strong>{lead.email || 'Not published'}</strong></div>
                     <div><span>Contact status</span><strong>{lead.contact_status || 'Research needed'}</strong></div>
@@ -194,11 +195,11 @@ export default function LeadDrawer({ leadId, onClose, onChanged }: { leadId: str
               )}
               {tab === 'crm' && (
                 <div className="form-grid crm-form">
-                  <label>Status<select value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value })}><option>Not Contacted</option><option>Contacted</option><option>Follow-up</option><option>Closed</option></select></label>
+                  <label>Status<select value={form.status} onChange={(e) => { const status = e.target.value; setForm({ ...form, status, deal_status: status === 'Completed' ? 'Won' : status === 'Cancel' ? 'Lost' : form.deal_status }) }}><option>Not Contacted</option><option>Contacted</option><option>Follow-up</option><option>Cancel</option><option>Completed</option></select></label>
                   <label>Assigned salesperson<input value={form.assigned_salesperson} onChange={(e) => setForm({ ...form, assigned_salesperson: e.target.value })} /></label>
                   <label>Call status<select value={form.call_status} onChange={(e) => setForm({ ...form, call_status: e.target.value })}><option>Pending</option><option>Connected</option><option>No answer</option><option>Not interested</option><option>Callback</option></select></label>
                   <label>Proposal<select value={form.proposal_status} onChange={(e) => setForm({ ...form, proposal_status: e.target.value })}><option>Not sent</option><option>Draft</option><option>Sent</option><option>Accepted</option><option>Rejected</option></select></label>
-                  <label>Deal<select value={form.deal_status} onChange={(e) => setForm({ ...form, deal_status: e.target.value })}><option>Open</option><option>Won</option><option>Lost</option></select></label>
+                  <label>Deal<select value={form.deal_status} onChange={(e) => { const deal = e.target.value; setForm({ ...form, deal_status: deal, status: deal === 'Won' ? 'Completed' : deal === 'Lost' ? 'Cancel' : (form.status === 'Completed' || form.status === 'Cancel' ? 'Follow-up' : form.status) }) }}><option>Open</option><option>Won</option><option>Lost</option></select></label>
                   <label>Follow-up date<input type="date" value={form.follow_up_date} onChange={(e) => setForm({ ...form, follow_up_date: e.target.value })} /></label>
                   <label>Last contact<input type="date" value={form.last_contact_date} onChange={(e) => setForm({ ...form, last_contact_date: e.target.value })} /></label>
                   <label className="full">Tags<input placeholder="priority, city, niche" value={form.tags} onChange={(e) => setForm({ ...form, tags: e.target.value })} /></label>

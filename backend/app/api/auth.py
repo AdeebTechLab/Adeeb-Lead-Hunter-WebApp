@@ -3,15 +3,15 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from pydantic import ValidationError
-from app.core.db_compat import is_duplicate_key_error
 
 from app.core.config import settings
 from app.core.database import mongo
+from app.core.db_compat import is_duplicate_key_error
 from app.core.dependencies import get_current_user
 from app.core.security import create_access_token, hash_password, verify_password
 from app.core.serializers import serialize_doc
-from app.models import LoginRequest, SignupRequest
-from app.services.activity import log_activity
+from app.models import LoginRequest, PasswordChangeRequest, SignupRequest
+from app.services.activity import create_admin_notification, log_activity
 from app.services.profile_images import delete_profile_image, upload_profile_image
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
@@ -46,8 +46,9 @@ async def signup(
         "password_hash": hash_password(payload.password),
         "cnic": payload.cnic,
         "city": payload.city,
-        "role": "salesperson",
+        "role": "user",
         "active": True,
+        "must_change_password": False,
         **image_data,
         "created_at": now,
         "updated_at": now,
@@ -63,6 +64,12 @@ async def signup(
         raise HTTPException(status_code=409, detail="An account with this email already exists") from exc
 
     log_activity(user, "Created", "Account", str(user["_id"]), "Account registration")
+    create_admin_notification(
+        "New user account",
+        f"{payload.name} created an account from {payload.city}.",
+        "account",
+        "/team",
+    )
     token = create_access_token(str(user["_id"]), {"role": user["role"]})
     return {"access_token": token, "token_type": "bearer", "user": serialize_doc(user)}
 
@@ -80,3 +87,24 @@ def login(payload: LoginRequest):
 @router.get("/me")
 def me(user: dict = Depends(get_current_user)):
     return serialize_doc(user)
+
+
+@router.post("/change-password")
+def change_password(payload: PasswordChangeRequest, user: dict = Depends(get_current_user)):
+    if not verify_password(payload.current_password, user.get("password_hash", "")):
+        raise HTTPException(status_code=400, detail="Current password is incorrect")
+    if verify_password(payload.new_password, user.get("password_hash", "")):
+        raise HTTPException(status_code=400, detail="New password must be different from the current password")
+
+    mongo.db.users.update_one(
+        {"_id": user["_id"]},
+        {
+            "$set": {
+                "password_hash": hash_password(payload.new_password),
+                "must_change_password": False,
+                "updated_at": datetime.now(timezone.utc),
+            }
+        },
+    )
+    log_activity(user, "Changed", "Password", str(user["_id"]))
+    return {"ok": True}

@@ -17,6 +17,11 @@ SearchFunction = Callable[[str, str, str, int], ProviderSearchResult]
 def provider_status() -> dict:
     return {
         "default": "auto",
+        "contact_enrichment": {
+            "tomtom": bool(settings.tomtom_api_key),
+            "website": bool(settings.enable_website_contact_enrichment),
+            "google": bool(settings.google_places_api_key),
+        },
         "providers": [
             {
                 "id": "auto",

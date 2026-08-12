@@ -11,8 +11,8 @@ type Analytics = {
   statuses: { name: string; value: number }[]
   cities: { name: string; value: number }[]
   average_score: number
-  won: number
-  lost: number
+  completed: number
+  cancelled: number
   open: number
 }
 
@@ -25,8 +25,8 @@ export default function AnalyticsPage() {
   const cards = [
     { label: 'Average score', value: data.average_score, icon: Gauge },
     { label: 'Open deals', value: data.open, icon: Target },
-    { label: 'Won deals', value: data.won, icon: Trophy },
-    { label: 'Lost deals', value: data.lost, icon: CircleDollarSign },
+    { label: 'Completed deals', value: data.completed, icon: Trophy },
+    { label: 'Cancelled deals', value: data.cancelled, icon: CircleDollarSign },
   ]
 
   return (

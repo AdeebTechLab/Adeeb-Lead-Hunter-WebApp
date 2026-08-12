@@ -20,7 +20,7 @@ class Database:
 
             self.client = MongoClient(
                 settings.mongodb_uri,
-                appName="ai-lead-hunter-api",
+                appName="adeeb-lead-hunter-api",
                 serverSelectionTimeoutMS=8000,
                 connectTimeoutMS=8000,
                 socketTimeoutMS=20000,
@@ -39,12 +39,14 @@ class Database:
         self.db.users.create_index([("cnic", ASCENDING)], unique=True, sparse=True)
         self.db.users.create_index([("role", ASCENDING), ("active", ASCENDING)])
         self.db.leads.create_index([("dedupe_key", ASCENDING)], unique=True, sparse=True)
+        self.db.leads.create_index([("dedupe_aliases", ASCENDING)])
         self.db.leads.create_index([("created_at", DESCENDING)])
+        self.db.leads.create_index([("created_by", ASCENDING), ("created_at", DESCENDING)])
         self.db.leads.create_index([("lead_score", DESCENDING)])
         self.db.leads.create_index([("city", ASCENDING), ("category", ASCENDING), ("lead_score", DESCENDING)])
         self.db.activity_logs.create_index([("created_at", DESCENDING)])
         self.db.notifications.create_index([("user_id", ASCENDING), ("read", ASCENDING), ("created_at", DESCENDING)])
-        self.db.lead_lists.create_index([("owner_id", ASCENDING), ("created_at", DESCENDING)])
+        self.db.lead_lists.create_index([("created_by", ASCENDING), ("created_at", DESCENDING)])
 
     def close(self) -> None:
         if self.client:

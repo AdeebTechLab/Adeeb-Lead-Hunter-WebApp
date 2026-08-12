@@ -9,31 +9,61 @@ from app.core.serializers import serialize_doc
 router = APIRouter(tags=["Dashboard"])
 
 
+def _scope(user: dict) -> dict:
+    return {} if user.get("role") == "admin" else {"created_by": user["_id"]}
+
+
+def _merge(scope: dict, extra: dict | None = None) -> dict:
+    return {**scope, **(extra or {})}
+
+
+def _lead_view(item: dict) -> dict:
+    result = serialize_doc(item)
+    if not result.get("created_by_name") and item.get("created_by"):
+        creator = mongo.db.users.find_one({"_id": item.get("created_by")})
+        result["created_by_name"] = creator.get("name") if creator else "Former user"
+    return result
+
+
 @router.get("/dashboard")
 def dashboard(user: dict = Depends(get_current_user)):
-    total = mongo.db.leads.count_documents({})
-    hot = mongo.db.leads.count_documents({"priority": "Hot"})
-    followups = mongo.db.leads.count_documents({"status": "Follow-up"})
-    won = mongo.db.leads.count_documents({"deal_status": "Won"})
-    contacted = mongo.db.leads.count_documents({"status": {"$in": ["Contacted", "Follow-up", "Closed"]}})
-    conversion = round((won / contacted) * 100, 1) if contacted else 0
-    recent = [serialize_doc(item) for item in mongo.db.leads.find().sort("created_at", -1).limit(6)]
-    top = [serialize_doc(item) for item in mongo.db.leads.find().sort("lead_score", -1).limit(5)]
-    pipeline = []
-    for label in ["Not Contacted", "Contacted", "Follow-up", "Closed"]:
-        pipeline.append({"name": label, "value": mongo.db.leads.count_documents({"status": label})})
-    services = []
-    for service in mongo.db.leads.distinct("recommended_service"):
-        services.append({"name": service, "value": mongo.db.leads.count_documents({"recommended_service": service})})
+    scope = _scope(user)
+    total = mongo.db.leads.count_documents(scope)
+    hot = mongo.db.leads.count_documents(_merge(scope, {"priority": "Hot"}))
+    followups = mongo.db.leads.count_documents(_merge(scope, {"status": "Follow-up"}))
+    completed = mongo.db.leads.count_documents(_merge(scope, {"status": "Completed"}))
+    cancelled = mongo.db.leads.count_documents(_merge(scope, {"status": "Cancel"}))
+    contacted = mongo.db.leads.count_documents(
+        _merge(scope, {"status": {"$in": ["Contacted", "Follow-up", "Cancel", "Completed"]}})
+    )
+    conversion = round((completed / contacted) * 100, 1) if contacted else 0
+    recent = [_lead_view(item) for item in mongo.db.leads.find(scope).sort("created_at", -1).limit(6)]
+    top = [_lead_view(item) for item in mongo.db.leads.find(scope).sort("lead_score", -1).limit(5)]
+
+    pipeline = [
+        {"name": label, "value": mongo.db.leads.count_documents(_merge(scope, {"status": label}))}
+        for label in ["Not Contacted", "Contacted", "Follow-up", "Cancel", "Completed"]
+    ]
+
+    scoped_leads = list(mongo.db.leads.find(scope))
+    service_names = sorted({item.get("recommended_service") for item in scoped_leads if item.get("recommended_service")})
+    services = [
+        {"name": service, "value": sum(1 for item in scoped_leads if item.get("recommended_service") == service)}
+        for service in service_names
+    ]
+
     cutoff = datetime.now(timezone.utc) - timedelta(days=7)
-    new_this_week = mongo.db.leads.count_documents({"created_at": {"$gte": cutoff}})
+    new_this_week = mongo.db.leads.count_documents(_merge(scope, {"created_at": {"$gte": cutoff}}))
     return {
         "stats": {
             "total_leads": total,
             "hot_leads": hot,
             "follow_ups": followups,
+            "completed_deals": completed,
+            "cancelled_deals": cancelled,
             "conversion_rate": conversion,
             "new_this_week": new_this_week,
+            "scope": "workspace" if user.get("role") == "admin" else "personal",
         },
         "pipeline": pipeline,
         "services": services,
@@ -44,19 +74,39 @@ def dashboard(user: dict = Depends(get_current_user)):
 
 @router.get("/analytics")
 def analytics(user: dict = Depends(get_current_user)):
-    priorities = [{"name": key, "value": mongo.db.leads.count_documents({"priority": key})} for key in ["Hot", "Warm", "Cold"]]
-    statuses = [{"name": key, "value": mongo.db.leads.count_documents({"status": key})} for key in ["Not Contacted", "Contacted", "Follow-up", "Closed"]]
-    cities = []
-    for city in mongo.db.leads.distinct("city"):
-        cities.append({"name": city, "value": mongo.db.leads.count_documents({"city": city})})
+    scope = _scope(user)
+    scoped_leads = list(mongo.db.leads.find(scope))
+
+    priorities = [
+        {"name": key, "value": sum(1 for item in scoped_leads if item.get("priority") == key)}
+        for key in ["Hot", "Warm", "Cold"]
+    ]
+    statuses = [
+        {"name": key, "value": sum(1 for item in scoped_leads if item.get("status") == key)}
+        for key in ["Not Contacted", "Contacted", "Follow-up", "Cancel", "Completed"]
+    ]
+    city_names = sorted({item.get("city") for item in scoped_leads if item.get("city")})
+    cities = [
+        {"name": city, "value": sum(1 for item in scoped_leads if item.get("city") == city)}
+        for city in city_names
+    ]
     cities.sort(key=lambda item: item["value"], reverse=True)
-    average = list(mongo.db.leads.aggregate([{"$group": {"_id": None, "value": {"$avg": "$lead_score"}}}]))
+
+    scores = [item.get("lead_score") for item in scoped_leads if isinstance(item.get("lead_score"), (int, float))]
+    average_score = round(sum(scores) / len(scores), 1) if scores else 0
+    completed = sum(1 for item in scoped_leads if item.get("status") == "Completed")
+    cancelled = sum(1 for item in scoped_leads if item.get("status") == "Cancel")
+    open_deals = sum(1 for item in scoped_leads if item.get("status") not in {"Completed", "Cancel"})
+
     return {
         "priorities": priorities,
         "statuses": statuses,
         "cities": cities[:8],
-        "average_score": round(average[0]["value"], 1) if average else 0,
-        "won": mongo.db.leads.count_documents({"deal_status": "Won"}),
-        "lost": mongo.db.leads.count_documents({"deal_status": "Lost"}),
-        "open": mongo.db.leads.count_documents({"deal_status": "Open"}),
+        "average_score": average_score,
+        "completed": completed,
+        "cancelled": cancelled,
+        "open": open_deals,
+        # Compatibility aliases for any cached frontend during rolling deployment.
+        "won": completed,
+        "lost": cancelled,
     }

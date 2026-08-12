@@ -1,4 +1,4 @@
-export type UserRole = 'admin' | 'manager' | 'salesperson'
+export type UserRole = 'admin' | 'user'
 
 export interface User {
   id: string
@@ -9,7 +9,12 @@ export interface User {
   city: string
   profile_image_url?: string | null
   active: boolean
+  must_change_password?: boolean
   created_at: string
+  updated_at?: string
+  lead_count?: number
+  contacted_count?: number
+  completed_count?: number
 }
 
 export interface ScoreProfile {
@@ -25,6 +30,8 @@ export interface ScoreBreakdown extends ScoreProfile {
   contactability: number
   engagement_signal: number
 }
+
+export type LeadStatus = 'Not Contacted' | 'Contacted' | 'Follow-up' | 'Cancel' | 'Completed'
 
 export interface Lead {
   id?: string
@@ -62,7 +69,7 @@ export interface Lead {
   business_summary: string
   audit?: Record<string, unknown>
   outreach?: Record<string, string>
-  status?: 'Not Contacted' | 'Contacted' | 'Follow-up' | 'Closed'
+  status?: LeadStatus
   notes?: string
   follow_up_date?: string | null
   last_contact_date?: string | null
@@ -71,6 +78,9 @@ export interface Lead {
   proposal_status?: string
   deal_status?: string
   meeting_notes?: string
+  created_by?: string
+  created_by_name?: string
+  created_by_email?: string
   created_at?: string
   updated_at?: string
   competitor_insights?: Lead[]

@@ -6,9 +6,9 @@ from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, EmailStr, Field, field_validator
 
-Role = Literal["admin", "manager", "salesperson"]
+Role = Literal["admin", "user"]
 LeadPriority = Literal["Hot", "Warm", "Cold"]
-LeadStatus = Literal["Not Contacted", "Contacted", "Follow-up", "Closed"]
+LeadStatus = Literal["Not Contacted", "Contacted", "Follow-up", "Cancel", "Completed"]
 ProviderId = Literal["auto", "google", "geoapify", "osm"]
 
 
@@ -55,15 +55,40 @@ class LoginRequest(BaseModel):
     password: str
 
 
-class UserCreateRequest(SignupRequest):
-    role: Role = "salesperson"
-
-
 class UserUpdateRequest(BaseModel):
     name: Optional[str] = Field(default=None, min_length=2, max_length=80)
+    email: Optional[EmailStr] = None
+    cnic: Optional[str] = None
     city: Optional[str] = Field(default=None, min_length=2, max_length=80)
-    role: Optional[Role] = None
-    active: Optional[bool] = None
+
+    @field_validator("name", "city")
+    @classmethod
+    def clean_text(cls, value: Optional[str]) -> Optional[str]:
+        return " ".join(value.strip().split()) if value is not None else value
+
+    @field_validator("cnic")
+    @classmethod
+    def clean_cnic(cls, value: Optional[str]) -> Optional[str]:
+        return normalize_cnic(value) if value is not None else value
+
+
+class PasswordChangeRequest(BaseModel):
+    current_password: str = Field(min_length=1, max_length=128)
+    new_password: str = Field(min_length=8, max_length=128)
+
+    @field_validator("new_password")
+    @classmethod
+    def password_rules(cls, value: str) -> str:
+        return validate_password(value)
+
+
+class PasswordResetRequest(BaseModel):
+    temporary_password: str = Field(min_length=8, max_length=128)
+
+    @field_validator("temporary_password")
+    @classmethod
+    def password_rules(cls, value: str) -> str:
+        return validate_password(value)
 
 
 class SearchRequest(BaseModel):

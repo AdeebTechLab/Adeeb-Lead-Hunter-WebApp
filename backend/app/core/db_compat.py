@@ -66,10 +66,18 @@ def _compare(value: Any, condition: Any) -> bool:
             continue
         if operator == "$gte" and not (value is not None and value >= expected):
             return False
-        if operator == "$in" and value not in expected:
-            return False
-        if operator == "$nin" and value in expected:
-            return False
+        if operator == "$in":
+            if isinstance(value, list):
+                if not any(item in expected for item in value):
+                    return False
+            elif value not in expected:
+                return False
+        if operator == "$nin":
+            if isinstance(value, list):
+                if any(item in expected for item in value):
+                    return False
+            elif value in expected:
+                return False
         if operator == "$regex":
             flags = re.I if "i" in regex_options else 0
             if re.search(expected, str(value or ""), flags) is None:
