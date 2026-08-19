@@ -11,7 +11,7 @@ from app.providers.google_places import google_places_search
 from app.providers.osm import osm_search
 from app.services.contact_enrichment import enrich_search_items
 
-SearchFunction = Callable[[str, str, str, int], ProviderSearchResult]
+SearchFunction = Callable[[str, str, str, int, int], ProviderSearchResult]
 
 
 def provider_status() -> dict:
@@ -56,8 +56,11 @@ def _identity(item: dict) -> str:
     city = re.sub(r"[^a-z0-9]", "", str(item.get("city") or "").casefold())
     address = re.sub(r"[^a-z0-9]", "", str(item.get("address") or "").casefold())
     place_id = re.sub(r"[^a-z0-9]", "", str(item.get("google_place_id") or "").casefold())
+    provider_place_id = re.sub(r"[^a-z0-9]", "", str(item.get("provider_place_id") or "").casefold())
     if place_id:
         return f"place|{place_id}"
+    if provider_place_id:
+        return f"provider|{provider_place_id}"
     if address:
         return f"name|{name}|{city}|{address}"
     lat, lon = item.get("latitude"), item.get("longitude")
@@ -74,6 +77,7 @@ def _merge(existing: dict, incoming: dict) -> dict:
         "website",
         "google_business_url",
         "google_place_id",
+        "provider_place_id",
         "facebook",
         "instagram",
         "linkedin",
@@ -120,9 +124,35 @@ def _candidate_chain(selected: str, keyword: str) -> list[tuple[str, SearchFunct
     return candidates
 
 
-def search_public_businesses(provider: str, keyword: str, city: str, province: str, limit: int) -> dict:
+def search_public_businesses(
+    provider: str,
+    keyword: str,
+    city: str,
+    province: str,
+    limit: int,
+    offset: int = 0,
+    *,
+    enrich: bool = True,
+) -> dict:
+    """Return one deterministic page of live public-business results.
+
+    `offset` is important for the qualified-lead workflow: once the first page has
+    been imported, the API layer can request later pages instead of repeating the
+    same top places. Geoapify uses its native offset parameter; OSM emulates the
+    same behaviour over a stable local slice.
+    """
     selected = provider.strip().lower()
-    cache_key = "|".join([selected, keyword.casefold().strip(), city.casefold().strip(), province.casefold().strip(), str(limit)])
+    safe_offset = max(int(offset), 0)
+    safe_limit = max(int(limit), 1)
+    cache_key = "|".join([
+        selected,
+        keyword.casefold().strip(),
+        city.casefold().strip(),
+        province.casefold().strip(),
+        str(safe_limit),
+        str(safe_offset),
+        "enriched" if enrich else "raw",
+    ])
     cached = search_cache.get(cache_key)
     if cached:
         return cached
@@ -137,8 +167,8 @@ def search_public_businesses(provider: str, keyword: str, city: str, province: s
 
     for name, search_function in candidates:
         try:
-            needed = max(1, limit - len(combined))
-            result = search_function(keyword, city, province, needed)
+            needed = max(1, safe_limit - len(combined))
+            result = search_function(keyword, city, province, needed, safe_offset)
             if result.items:
                 providers_used.append(name)
                 if result.attribution:
@@ -151,31 +181,43 @@ def search_public_businesses(provider: str, keyword: str, city: str, province: s
                     if not key.strip("|"):
                         continue
                     combined[key] = _merge(combined[key], item) if key in combined else item
-                    if len(combined) >= limit:
+                    if len(combined) >= safe_limit:
                         break
-            else:
+            elif safe_offset == 0:
                 warnings.append(f"{name.title()} returned no matching businesses; another live source was checked.")
         except ProviderError as exc:
             errors.append(str(exc))
-            # Explicit selection does not fail over, but raw upstream URLs/status traces
-            # are never exposed to the UI. Configuration errors are raised earlier.
             if selected != "auto":
                 raise ProviderError(
                     f"{name.title()} could not complete this live search. Retry shortly or choose Automatic so another configured source can be used."
                 ) from exc
-        if len(combined) >= limit:
+        if len(combined) >= safe_limit:
             break
 
-    items = list(combined.values())[:limit]
+    items = list(combined.values())[:safe_limit]
     if not items:
+        # Empty later pages mean the source has been exhausted, not that the live
+        # provider is broken. The API layer uses this to stop paging cleanly.
+        if safe_offset > 0:
+            payload = {
+                "items": [],
+                "provider": "+".join(providers_used) if providers_used else selected,
+                "attribution": " · ".join(dict.fromkeys(attributions)),
+                "cached": False,
+                "warnings": list(dict.fromkeys(warnings)),
+                "endpoint": " + ".join(dict.fromkeys(endpoints)),
+            }
+            search_cache.set(cache_key, payload, settings.provider_cache_ttl_seconds)
+            return payload
         safe_message = "Live business data is temporarily unavailable or no matching businesses were found. Check the city, niche and configured API key, then retry."
         if errors:
             warnings.append("Automatic retries completed without a usable result.")
         raise ProviderError(safe_message)
 
     primary_provider = providers_used[0] if len(providers_used) == 1 else "+".join(providers_used)
-    items, contact_warnings = enrich_search_items(items, primary_provider)
-    warnings.extend(contact_warnings)
+    if enrich:
+        items, contact_warnings = enrich_search_items(items, primary_provider)
+        warnings.extend(contact_warnings)
     if errors and selected == "auto":
         warnings.append("One live source was unavailable, so Automatic mode used another configured source without stopping the search.")
 

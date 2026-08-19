@@ -709,3 +709,158 @@ textarea {
   flex: 0 0 auto;
   overflow: visible;
 }
+
+/* v1.5 form polish: consistent professional fields and full-height caret */
+.auth-form .input-with-icon,
+.hunter-form .input-with-icon {
+  min-height: 48px;
+  padding: 0 13px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--card-muted);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.025);
+  transition: border-color .18s ease, box-shadow .18s ease, background-color .18s ease;
+  overflow: visible;
+}
+.auth-form .input-with-icon:focus-within,
+.hunter-form .input-with-icon:focus-within {
+  border-color: var(--accent);
+  background: var(--card);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.auth-form .input-with-icon input,
+.hunter-form .input-with-icon input,
+.city-input-wrap .city-entry {
+  height: 46px;
+  min-height: 46px;
+  line-height: 22px !important;
+  padding: 12px 0 !important;
+  border: 0 !important;
+  border-radius: 0;
+  background: transparent !important;
+  color: var(--text) !important;
+  box-shadow: none !important;
+  caret-color: var(--accent);
+  overflow: visible;
+}
+.auth-form .input-with-icon input::placeholder,
+.hunter-form .input-with-icon input::placeholder { color: color-mix(in srgb, var(--muted) 82%, transparent); }
+
+/* Keep Chrome/Edge autofill from painting a bright inner rectangle in dark mode. */
+.auth-form input:-webkit-autofill,
+.auth-form input:-webkit-autofill:hover,
+.auth-form input:-webkit-autofill:focus,
+.auth-form input:-webkit-autofill:active {
+  -webkit-text-fill-color: var(--text) !important;
+  caret-color: var(--accent) !important;
+  -webkit-box-shadow: 0 0 0 1000px var(--card-muted) inset !important;
+  box-shadow: 0 0 0 1000px var(--card-muted) inset !important;
+  transition: background-color 9999s ease-out 0s;
+}
+.auth-form .input-with-icon:focus-within input:-webkit-autofill {
+  -webkit-box-shadow: 0 0 0 1000px var(--card) inset !important;
+  box-shadow: 0 0 0 1000px var(--card) inset !important;
+}
+
+.hunter-form > label > input,
+.hunter-form > label > select {
+  min-height: 48px;
+  border-radius: 12px;
+  background: var(--card-muted);
+  padding-inline: 13px;
+}
+.hunter-form > label > input:focus,
+.hunter-form > label > select:focus { background: var(--card); }
+.limit-entry {
+  appearance: textfield;
+  -moz-appearance: textfield;
+}
+.limit-entry::-webkit-outer-spin-button,
+.limit-entry::-webkit-inner-spin-button {
+  margin: 0;
+  -webkit-appearance: none;
+}
+
+/* v1.6 field system: consistent, production-grade inputs across auth and workspace */
+input:not([type='checkbox']):not([type='radio']):not([type='range']),
+select,
+textarea {
+  min-height: 46px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--card-muted);
+  color: var(--text);
+  padding: 11px 13px;
+  line-height: 22px;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.025);
+  transition: border-color .18s ease, box-shadow .18s ease, background-color .18s ease;
+}
+input:not([type='checkbox']):not([type='radio']):not([type='range']):hover,
+select:hover,
+textarea:hover { border-color: color-mix(in srgb, var(--line) 55%, var(--text)); }
+input:not([type='checkbox']):not([type='radio']):not([type='range']):focus,
+select:focus,
+textarea:focus {
+  border-color: var(--accent);
+  background: var(--card);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+/* Icon fields own the border/background; their inner input remains transparent. */
+.input-with-icon input:not([type='checkbox']):not([type='radio']):not([type='range']) {
+  min-height: 44px;
+  height: 44px;
+  border: 0 !important;
+  background: transparent !important;
+  padding: 11px 0 !important;
+  box-shadow: none !important;
+  line-height: 22px !important;
+  caret-color: var(--accent);
+}
+.auth-form .input-with-icon,
+.hunter-form .input-with-icon {
+  min-height: 48px;
+  border-radius: 12px;
+  background: var(--card-muted);
+}
+
+/* Chrome/Edge saved-login autofill must not paint a pale rectangle inside dark fields. */
+.auth-form input:-webkit-autofill,
+.auth-form input:-webkit-autofill:hover,
+.auth-form input:-webkit-autofill:focus,
+.auth-form input:-webkit-autofill:active {
+  -webkit-text-fill-color: var(--text) !important;
+  caret-color: var(--accent) !important;
+  -webkit-background-clip: text !important;
+  background-clip: text !important;
+  -webkit-box-shadow: 0 0 0 1000px transparent inset !important;
+  box-shadow: 0 0 0 1000px transparent inset !important;
+  transition: background-color 9999s ease-out 0s;
+}
+:root[data-theme='dark'] .auth-form input:-webkit-autofill {
+  -webkit-text-fill-color: #f4f7f9 !important;
+}
+
+/* Search-result identity: distinguish same-name branches without changing stored business names. */
+.business-identity { display: grid; gap: 4px; min-width: 0; }
+.business-name-line { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; }
+.business-name-line strong { min-width: 0; }
+.business-name-line em {
+  padding: 3px 7px;
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--line));
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 9px;
+  font-style: normal;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.business-identity > span { color: var(--muted); font-size: 10px; }
+.business-identity > small {
+  color: color-mix(in srgb, var(--muted) 88%, var(--text));
+  font-size: 9px;
+  line-height: 1.45;
+  max-width: 340px;
+  overflow-wrap: anywhere;
+}

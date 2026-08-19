@@ -1,5 +1,5 @@
-import { Download, ExternalLink, Filter, Mail, Phone, Search, X } from 'lucide-react'
-import { useEffect, useMemo, useState } from 'react'
+import { Download, ExternalLink, Filter, Mail, Phone, Search, Trash2, X } from 'lucide-react'
+import { type MouseEvent, useEffect, useMemo, useState } from 'react'
 import toast from 'react-hot-toast'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { api, downloadFile } from '../api'
@@ -10,6 +10,7 @@ import StatusBadge from '../components/StatusBadge'
 import { useAuth } from '../contexts/AuthContext'
 import { useRefresh } from '../contexts/RefreshContext'
 import type { Lead } from '../types'
+import { googleMapsVerificationUrl } from '../utils/maps'
 
 type LeadResponse = { items: Lead[]; total: number; page: number; pages: number }
 type Options = { cities: string[]; categories: string[]; services: string[] }
@@ -31,6 +32,7 @@ export default function LeadsPage() {
   const [options, setOptions] = useState<Options>({ cities: [], categories: [], services: [] })
   const [filters, setFilters] = useState({ q: '', city: '', category: '', priority: searchParams.get('priority') || '', status: '', service: '', website: '', social: '', contact: '', min_score: '0', sort_by: 'lead_score', sort_order: 'desc' })
   const [page, setPage] = useState(1)
+  const [deletingLeadId, setDeletingLeadId] = useState<string | null>(null)
   const { refreshKey } = useRefresh()
   const { user } = useAuth()
 
@@ -59,6 +61,24 @@ export default function LeadsPage() {
   function reset() {
     setFilters({ q: '', city: '', category: '', priority: '', status: '', service: '', website: '', social: '', contact: '', min_score: '0', sort_by: 'lead_score', sort_order: 'desc' })
     setPage(1)
+  }
+
+  async function deleteLead(lead: Lead, event: MouseEvent<HTMLButtonElement>) {
+    event.stopPropagation()
+    if (!lead.id || deletingLeadId) return
+    const confirmed = window.confirm(`Delete ${lead.business_name} from Qualified Leads? This will remove its CRM record and saved-list references.`)
+    if (!confirmed) return
+    setDeletingLeadId(lead.id)
+    try {
+      await api(`/leads/${lead.id}`, { method: 'DELETE' })
+      toast.success('Lead deleted')
+      if (leadId === lead.id) navigate('/leads')
+      load()
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Delete failed')
+    } finally {
+      setDeletingLeadId(null)
+    }
   }
 
   return (
@@ -94,7 +114,7 @@ export default function LeadsPage() {
           <>
             <div className="table-wrap">
               <table className="qualified-table">
-                <thead><tr><th>Business</th><th>City</th>{user?.role === 'admin' && <th>Created by</th>}<th>Contact</th><th>Website</th><th>Score</th><th>Service</th><th>Status</th></tr></thead>
+                <thead><tr><th>Business</th><th>City</th>{user?.role === 'admin' && <th>Created by</th>}<th>Contact</th><th>Website</th><th>Score</th><th>Service</th><th>Status</th><th aria-label="Actions" /></tr></thead>
                 <tbody>{data.items.map((lead) => (
                   <tr key={lead.id} onClick={() => navigate(`/leads/${lead.id}`)}>
                     <td><strong>{lead.business_name}</strong><span>{lead.category}</span></td>
@@ -107,13 +127,13 @@ export default function LeadsPage() {
                         <div>
                           {lead.phone && <a href={`tel:${lead.phone}`} onClick={(event) => event.stopPropagation()} title="Call"><Phone size={13} /></a>}
                           {lead.email && <a href={`mailto:${lead.email}`} onClick={(event) => event.stopPropagation()} title="Email"><Mail size={13} /></a>}
-                          {lead.contact_search_url && <a href={lead.contact_search_url} target="_blank" rel="noreferrer" onClick={(event) => event.stopPropagation()} title="Review listing"><ExternalLink size={13} /></a>}
+                          <a href={googleMapsVerificationUrl(lead)} target="_blank" rel="noreferrer" onClick={(event) => event.stopPropagation()} title="Verify on Google Maps"><ExternalLink size={13} /></a>
                         </div>
                       </div>
                     </td>
                     <td><StatusBadge value={lead.website ? 'Available' : 'Missing'} /></td>
                     <td><div className="score-cell"><strong>{lead.lead_score}</strong><StatusBadge value={lead.priority} /></div></td>
-                    <td>{lead.recommended_service}</td><td><StatusBadge value={lead.status} /></td>
+                    <td>{lead.recommended_service}</td><td><StatusBadge value={lead.status} /></td><td><button className="icon-button small danger-icon" type="button" title="Delete lead" aria-label={`Delete ${lead.business_name}`} disabled={deletingLeadId === lead.id} onClick={(event) => deleteLead(lead, event)}><Trash2 size={14} /></button></td>
                   </tr>
                 ))}</tbody>
               </table>

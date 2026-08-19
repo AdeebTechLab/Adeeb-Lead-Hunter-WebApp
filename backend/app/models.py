@@ -96,7 +96,7 @@ class SearchRequest(BaseModel):
     city: str = Field(min_length=2, max_length=80)
     province: str = Field(default="Punjab", max_length=80)
     provider: ProviderId = "auto"
-    limit: int = Field(default=12, ge=1, le=40)
+    limit: int = Field(ge=1, le=100)
 
 
 class LeadCreateRequest(BaseModel):

@@ -201,6 +201,55 @@ def _contact_instruction(lead: Dict[str, Any]) -> str:
     return "Open the Google Maps listing from the lead record and verify a public phone number before outreach. Do not use an unverified number."
 
 
+ROMAN_URDU_SERVICE_VALUE = {
+    "Website Development": "ek fast aur mobile-friendly website jo customer ko search se call, WhatsApp ya booking tak asani se le jaye",
+    "SEO": "local search mein behtari taa-ke high-intent customers ko business Google par zyada asani se nazar aaye",
+    "Social Media Marketing": "consistent content aur campaign system jo trust banaye aur enquiries generate kare",
+    "AI Automation": "WhatsApp, enquiry, booking aur follow-up ko automate karna taa-ke missed opportunities kam hon",
+    "Virtual Assistant Services": "lead follow-up, scheduling, data entry aur customer coordination ke liye reliable support workflow",
+}
+
+
+def _roman_urdu_reason(reason: str) -> str:
+    exact = {
+        "Website missing": "website maujood nahin hai",
+        "SSL is not enabled": "website par SSL security enabled nahin hai",
+        "Website is not mobile friendly": "website mobile par properly optimized nahin hai",
+        "Contact form missing": "website par contact form maujood nahin hai",
+        "WhatsApp conversion path missing": "customer ke liye direct WhatsApp enquiry ka clear rasta maujood nahin hai",
+        "Online booking opportunity": "online booking system add karne ka acha mauqa hai",
+        "Social profiles missing or not found": "public social media profiles ya to maujood nahin hain ya verify nahin ho rahe",
+        "Limited social presence": "social media presence limited hai",
+        "Multiple public social profiles found": "multiple public social profiles maujood hain",
+        "Strong public customer engagement": "public customer engagement strong nazar aa rahi hai",
+        "Established public engagement": "public engagement achi aur established nazar aa rahi hai",
+        "Some public customer engagement": "kuch public customer engagement nazar aa rahi hai",
+        "Direct phone contact available": "direct phone contact available hai",
+        "Public email contact available": "public email contact available hai",
+        "Direct contact information is limited": "direct contact information limited hai",
+        "Public profile needs manual qualification": "public profile ko thori manual verification ki zarurat hai",
+    }
+    if reason in exact:
+        return exact[reason]
+    if reason.startswith("Basic SEO score is "):
+        score = reason.removeprefix("Basic SEO score is ")
+        return f"basic SEO score {score} hai aur is mein behtari ki gunjaish hai"
+    if " broken link checks found" in reason:
+        number = reason.split(" ", 1)[0]
+        return f"website audit mein {number} broken link checks mile hain"
+    return reason.lower()
+
+
+def _roman_urdu_contact_instruction(lead: Dict[str, Any]) -> str:
+    if lead.get("phone"):
+        return f"{lead['phone']} par call karein aur owner, manager ya marketing/customer enquiries handle karne wale shakhs se baat karne ko kahen."
+    if lead.get("email"):
+        return f"{lead['email']} ko email available hai; call se pehle Google Maps ya website se decision-maker ka public contact verify karein."
+    if lead.get("website"):
+        return "Website ka contact page aur Google Maps listing check karke public phone number ya decision-maker verify karein."
+    return "Lead ke Google Maps verification link se public phone number verify karein. Kisi bhi unverified number par outreach na karein."
+
+
 def build_outreach(lead: Dict[str, Any], service: str, reasons: List[str]) -> Dict[str, str]:
     name = lead.get("business_name", "the business")
     category = lead.get("category", "business")
@@ -210,47 +259,54 @@ def build_outreach(lead: Dict[str, Any], service: str, reasons: List[str]) -> Di
     value = SERVICE_VALUE.get(service, "a focused digital growth plan")
     instruction = _contact_instruction(lead)
 
-    cold_call = f"""PRE-CALL
-- {instruction}
-- Open the lead audit and confirm these observations: {issue}; {secondary}.
-- Goal: book a 15-minute audit review, not sell the full project on the first call.
+    issue_ru = _roman_urdu_reason(issue)
+    secondary_ru = _roman_urdu_reason(secondary)
+    value_ru = ROMAN_URDU_SERVICE_VALUE.get(service, "ek focused digital growth plan jo customer journey aur enquiries ko improve kare")
+    instruction_ru = _roman_urdu_contact_instruction(lead)
 
-OPENING
-You: Assalam-o-Alaikum, may I speak with the owner, manager, or the person who handles marketing and customer enquiries for {name}?
+    # Only the cold-call script is Roman Urdu (Urdu written in Latin script).
+    # WhatsApp, email, LinkedIn, call plan and follow-ups remain English below.
+    cold_call = f"""CALL SE PEHLE
+- {instruction_ru}
+- Lead audit khol kar yeh observations confirm karein: {issue_ru}; {secondary_ru}.
+- Maqsad: pehli call par poora project sell karna nahin, balkeh 15-minute audit review book karna hai.
 
-Decision-maker joins:
-You: My name is [Your Name] from [Agency Name]. We help {category.lower()} businesses in {city} improve enquiries and follow-up. I reviewed only the public online presence of {name} and noticed {issue.lower()}. Is this a bad time, or may I take 40 seconds to explain why I called?
+SHURUAT
+Aap: Assalam-o-Alaikum, kya meri baat {name} ke owner, manager, ya marketing aur customer enquiries handle karne wale person se ho sakti hai?
+
+Jab decision-maker line par aa jaye:
+Aap: Mera naam [Your Name] hai aur main [Agency Name] se baat kar raha/rahi hoon. Hum {city} mein {category.lower()} businesses ko customer enquiries aur follow-up improve karne mein help karte hain. Main ne {name} ki sirf public online presence review ki aur dekha ke {issue_ru}. Agar aap busy nahin hain to kya main 40 seconds mein call ki wajah explain kar sakta/sakti hoon?
 
 40-SECOND REASON
-You: Thank you. The main opportunity is {issue.lower()}. We would recommend starting with {service}: {value}. The objective is to make it easier for a customer to discover you, trust you and contact or book with you.
+Aap: Shukriya. Sab se clear opportunity yeh hai ke {issue_ru}. Hamari recommendation hai ke pehla step {service} ho. Is se {value_ru}. Maqsad yeh hai ke customer aap ko asani se find kare, trust kare aur phir call, WhatsApp ya booking tak pohanch sake.
 
-DISCOVERY QUESTIONS
-1. How do most new customers currently find you: referrals, Google, social media or walk-ins?
-2. When a customer calls or messages after working hours, how is that enquiry followed up?
-3. Are you satisfied with the number and quality of enquiries you receive each month?
-4. Who currently manages your website, social pages and WhatsApp follow-up?
-5. Is improving enquiries or reducing missed follow-ups a priority in the next 30–60 days?
+DISCOVERY SAWALAT
+1. Aap ke zyada tar naye customers aaj kal kahan se aate hain — referrals, Google, social media ya walk-ins?
+2. Agar koi customer office hours ke baad call ya message kare to us enquiry ka follow-up kis tarah hota hai?
+3. Kya aap har mahine milne wali enquiries ki quantity aur quality se satisfied hain?
+4. Aap ki website, social pages aur WhatsApp follow-up abhi kaun manage karta hai?
+5. Agle 30–60 din mein enquiries improve karna ya missed follow-ups kam karna aap ki priority hai?
 
 TAILORED VALUE
-You: Based on what you shared, the first practical step is {service}. We would begin with a short audit, agree on the highest-impact fixes, and show the expected customer journey before any larger commitment.
+Aap: Aap ne jo bataya us ke mutabiq sab se practical pehla step {service} hai. Hum pehle short audit karenge, phir highest-impact fixes agree karenge aur kisi bari commitment se pehle aap ko clear customer journey aur recommended plan dikhayenge.
 
 CLOSE
-You: I can prepare a concise audit for {name} with the issues, recommended fixes, timeline and options. Would a 15-minute call on [Day/Time Option 1] or [Day/Time Option 2] be easier?
+Aap: Main {name} ke liye ek short audit prepare kar sakta/sakti hoon jis mein issues, recommended fixes, expected timeline aur options honge. Aap ke liye 15-minute call [Day/Time Option 1] behtar rahegi ya [Day/Time Option 2]?
 
-IF THEY ASK FOR PRICE
-You: The price depends on the exact scope, so I do not want to quote inaccurately. After the 15-minute review, we can give a fixed option based on the priority work only. There is no obligation to proceed.
+AGAR PRICE POOCHAIN
+Aap: Exact price scope par depend karti hai, is liye main bina details ke ghalat quote nahin dena chahta/chahti. 15-minute review ke baad hum sirf priority work ke mutabiq clear fixed option share kar denge. Proceed karna compulsory nahin hoga.
 
-IF THEY ALREADY HAVE A PROVIDER
-You: That is good. We are not asking you to replace anyone immediately. The audit can act as a second opinion and identify gaps such as {issue.lower()}. If everything is already covered, you still keep the findings.
+AGAR PEHLE SE KOI PROVIDER HAI
+Aap: Yeh achi baat hai. Hum aap ko foran provider replace karne ko nahin keh rahe. Hamara audit second opinion ki tarah hoga aur {issue_ru} jaisi possible gaps verify karega. Agar sab kuch already covered hai to bhi findings aap ke paas rahengi.
 
-IF THEY ARE BUSY
-You: Understood. May I send the two-line finding by WhatsApp or email, then call at a time you choose?
+AGAR BUSY HAIN
+Aap: Bilkul samajh sakta/sakti hoon. Kya main do-line finding WhatsApp ya email par bhej doon aur phir aap ke convenient time par call kar loon?
 
-IF THEY ARE NOT INTERESTED
-You: No problem. Before I close the record, is it because this is not a priority now, or because you already have the area fully covered? [Record the reason and ask permission for one future follow-up if appropriate.]
+AGAR INTERESTED NAHIN HAIN
+Aap: Koi masla nahin. Record close karne se pehle sirf itna bata dein ke abhi priority nahin hai, ya yeh area already fully covered hai? Agar aap munasib samjhein to future mein ek follow-up ki permission le loon.
 
 END
-You: Thank you for your time. I will send the agreed summary now and confirm the meeting. Have a good day."""
+Aap: Aap ke waqt ka bohat shukriya. Main agreed summary abhi share kar deta/deti hoon aur agar meeting confirm hui hai to us ka time bhi confirm kar dunga/dungi. Allah Hafiz."""
 
     call_plan = f"""Primary objective: Book a 15-minute audit review for {service}.
 Decision-maker: Owner, branch manager, marketing manager or operations manager.

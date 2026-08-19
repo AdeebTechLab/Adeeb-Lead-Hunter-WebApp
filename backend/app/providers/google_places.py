@@ -125,7 +125,17 @@ def _normalise_place(place: Dict[str, Any], keyword: str, city: str, province: s
     }
 
 
-def google_places_search(keyword: str, city: str, province: str, limit: int) -> ProviderSearchResult:
+def google_places_search(keyword: str, city: str, province: str, limit: int, offset: int = 0) -> ProviderSearchResult:
+    # Text Search pagination uses page tokens rather than numeric offsets. The
+    # project currently keeps Google optional; later numeric pages are therefore
+    # left empty so Automatic mode can continue through Geoapify/OSM.
+    if offset > 0:
+        return ProviderSearchResult(
+            items=[],
+            provider="google",
+            attribution="Business details from Google Places API",
+            endpoint="Google Places Text Search (New)",
+        )
     query = f"{keyword.strip()} in {city.strip()}, {province.strip()}, Pakistan"
     places = _request_places(query, limit)
     items: List[dict] = []

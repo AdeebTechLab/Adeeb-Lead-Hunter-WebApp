@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react'
 import toast from 'react-hot-toast'
 import { api } from '../api'
 import type { Lead } from '../types'
+import { googleMapsVerificationUrl } from '../utils/maps'
 import StatusBadge from './StatusBadge'
 
 function displayValue(value: unknown) {
@@ -144,9 +145,7 @@ export default function LeadDrawer({ leadId, onClose, onChanged }: { leadId: str
                     {lead.phone && <a className="primary-contact" href={`tel:${lead.phone}`}><Phone size={16} />Call {lead.phone}</a>}
                     {lead.email && <a href={`mailto:${lead.email}`}><Mail size={16} />Email</a>}
                     {lead.website && <a href={lead.website} target="_blank" rel="noreferrer"><Globe2 size={16} />Website<ExternalLink size={14} /></a>}
-                    {lead.google_business_url && <a href={lead.google_business_url} target="_blank" rel="noreferrer"><MapPinned size={16} />Google Maps<ExternalLink size={14} /></a>}
-                    {!lead.google_business_url && lead.contact_search_url && <a href={lead.contact_search_url} target="_blank" rel="noreferrer"><MapPinned size={16} />Find contact on Maps<ExternalLink size={14} /></a>}
-                    {lead.source_url && <a href={lead.source_url} target="_blank" rel="noreferrer">Source<ExternalLink size={14} /></a>}
+                    <a href={googleMapsVerificationUrl(lead)} target="_blank" rel="noreferrer"><MapPinned size={16} />Verify on Google Maps<ExternalLink size={14} /></a>
                   </div>
                   {!!lead.contact_sources?.length && <div className="source-proof"><span>Contact sources</span><strong>{lead.contact_sources.join(' · ')}</strong><small>Verify the decision-maker before outreach. The system does not invent missing numbers.</small></div>}
                   <div>
@@ -183,7 +182,7 @@ export default function LeadDrawer({ leadId, onClose, onChanged }: { leadId: str
                   <div className="outreach-contact-bar">
                     <div><strong>Contact now</strong><span>{lead.phone || lead.email || 'Verify a public contact first'}</span></div>
                     {lead.phone && <a className="button primary compact" href={`tel:${lead.phone}`}><Phone size={15} />Call</a>}
-                    {!lead.phone && lead.contact_search_url && <a className="button secondary compact" href={lead.contact_search_url} target="_blank" rel="noreferrer"><MapPinned size={15} />Find contact</a>}
+                    {!lead.phone && <a className="button secondary compact" href={googleMapsVerificationUrl(lead)} target="_blank" rel="noreferrer"><MapPinned size={15} />Verify on Maps</a>}
                   </div>
                   {Object.entries(lead.outreach || {}).map(([key, value]) => (
                     <div className={`message-card ${key === 'cold_call' ? 'featured-script' : ''}`} key={key}>

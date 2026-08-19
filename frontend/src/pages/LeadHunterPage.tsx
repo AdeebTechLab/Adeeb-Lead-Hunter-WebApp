@@ -5,6 +5,7 @@ import { api } from '../api'
 import EmptyState from '../components/EmptyState'
 import StatusBadge from '../components/StatusBadge'
 import type { Lead, ProviderOption } from '../types'
+import { googleMapsVerificationUrl } from '../utils/maps'
 
 const niches = [
   'Restaurant', 'Cafe', 'Bakery', 'Real Estate', 'Property Dealer', 'Hospital', 'Clinic', 'Dental Clinic',
@@ -25,12 +26,29 @@ type SearchResponse = {
   cached: boolean
   attribution?: string | null
   warnings: string[]
+  pages_scanned?: number
+  resolved_city?: string
+  city_corrected?: boolean
 }
 
 type ProviderResponse = { default: string; providers: ProviderOption[]; contact_enrichment?: { tomtom: boolean; website: boolean; google: boolean } }
 
+
+function normalisedBusinessName(value: string) {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
+}
+
+function branchMeta(items: Lead[], index: number) {
+  const key = normalisedBusinessName(items[index]?.business_name || '')
+  if (!key) return null
+  const matches = items.map((lead, itemIndex) => ({ lead, itemIndex })).filter(({ lead }) => normalisedBusinessName(lead.business_name) === key)
+  if (matches.length < 2) return null
+  const position = matches.findIndex(({ itemIndex }) => itemIndex === index) + 1
+  return { position, total: matches.length }
+}
+
 export default function LeadHunterPage() {
-  const [form, setForm] = useState({ keyword: 'Restaurant', city: 'Lahore', province: 'Punjab', provider: 'auto', limit: 12 })
+  const [form, setForm] = useState({ keyword: 'Restaurant', city: 'Lahore', province: 'Punjab', provider: 'auto', limit: '' })
   const [items, setItems] = useState<Lead[]>([])
   const [meta, setMeta] = useState<Omit<SearchResponse, 'items' | 'count' | 'excluded_existing'> | null>(null)
   const [providers, setProviders] = useState<ProviderOption[]>([])
@@ -53,10 +71,26 @@ export default function LeadHunterPage() {
     setMeta(null)
     setSearchError(null)
     try {
-      const result = await api<SearchResponse>('/leads/search', { method: 'POST', body: JSON.stringify(form) })
+      const requestedLimit = Number(form.limit)
+      if (!Number.isInteger(requestedLimit) || requestedLimit < 1 || requestedLimit > 100) {
+        setLoading(false)
+        return toast.error('Enter a limit from 1 to 100')
+      }
+      const result = await api<SearchResponse>('/leads/search', {
+        method: 'POST',
+        body: JSON.stringify({ ...form, limit: requestedLimit }),
+      })
       setItems(result.items)
-      setMeta({ provider: result.provider, cached: result.cached, attribution: result.attribution, warnings: result.warnings || [] })
-      toast.success(result.excluded_existing ? `${result.items.length} new leads found · ${result.excluded_existing} already qualified hidden` : `${result.items.length} new leads found`)
+      setMeta({ provider: result.provider, cached: result.cached, attribution: result.attribution, warnings: result.warnings || [], pages_scanned: result.pages_scanned, resolved_city: result.resolved_city, city_corrected: result.city_corrected })
+      if (result.city_corrected && result.resolved_city) {
+        setForm((current) => ({ ...current, city: result.resolved_city || current.city }))
+        toast(`Using ${result.resolved_city} for this search`)
+      }
+      if (result.items.length) {
+        toast.success(result.excluded_existing ? `${result.items.length} new leads found · ${result.excluded_existing} qualified leads skipped` : `${result.items.length} new leads found`)
+      } else {
+        toast('No additional new leads were found for this search')
+      }
     } catch (error) {
       setItems([])
       setSearchError(error instanceof Error ? error.message : 'Live search is temporarily unavailable. Please retry.')
@@ -103,10 +137,10 @@ export default function LeadHunterPage() {
               { id: 'osm', name: 'OpenStreetMap', configured: true, description: '' },
             ] as ProviderOption[]).map((provider) => <option key={provider.id} value={provider.id}>{provider.name}</option>)}
           </select></label>
-          <label>Limit<select value={form.limit} onChange={(e) => setForm({ ...form, limit: Number(e.target.value) })}><option>8</option><option>12</option><option>20</option><option>30</option></select></label>
+          <label>Limit<input className="limit-entry" type="number" inputMode="numeric" min="1" max="100" step="1" placeholder="e.g. 20" value={form.limit} onChange={(e) => setForm({ ...form, limit: e.target.value })} required /></label>
           <button className="button primary" disabled={loading}><Search size={17} />{loading ? 'Searching live' : 'Search'}</button>
         </form>
-        <div className="source-note"><Cloud size={15} />Geoapify/OpenStreetMap discovery · {contactEnrichment.tomtom ? 'TomTom Search API + official website contact verification' : 'official website contact verification'}</div>
+        <div className="source-note"><Cloud size={15} />Geoapify/OpenStreetMap discovery · {contactEnrichment.tomtom ? 'TomTom Places Search API + official website contact verification' : 'official website contact verification'}</div>
         {meta && <div className="source-meta"><strong>{meta.provider.replaceAll('+', ' + ')}</strong><span>{meta.cached ? 'Cached result' : 'Live result'}</span>{meta.attribution && <span>{meta.attribution}</span>}</div>}
         {meta?.warnings.map((warning) => <div className="provider-warning" key={warning}><AlertTriangle size={14} />{warning}</div>)}
         {searchError && <div className="search-error-panel" role="alert"><AlertTriangle size={19} /><div><strong>Live search could not complete</strong><span>{searchError}</span></div><button type="button" className="button secondary compact" onClick={() => setSearchError(null)}>Dismiss</button></div>}
@@ -124,7 +158,13 @@ export default function LeadHunterPage() {
               <tbody>{items.map((lead, index) => (
                 <tr key={`${lead.business_name}-${lead.source_url || index}`}>
                   <td><input type="checkbox" checked={selected.has(index)} onChange={() => toggle(index)} /></td>
-                  <td><strong>{lead.business_name}</strong><span>{lead.category} · {lead.city}</span></td>
+                  <td>
+                    <div className="business-identity">
+                      <div className="business-name-line"><strong>{lead.business_name}</strong>{branchMeta(items, index) && <em>Location {branchMeta(items, index)?.position}/{branchMeta(items, index)?.total}</em>}</div>
+                      <span>{lead.category} · {lead.city}</span>
+                      {lead.address && <small>{lead.address}</small>}
+                    </div>
+                  </td>
                   <td>
                     <div className="contact-cell enriched-contact-cell">
                       <div className="contact-lines">
@@ -139,7 +179,7 @@ export default function LeadHunterPage() {
                         {lead.phone && <a href={`tel:${lead.phone}`} title="Call"><Phone size={13} /><span>Call</span></a>}
                         {lead.email && <a href={`mailto:${lead.email}`} title="Email"><Mail size={13} /><span>Email</span></a>}
                         {lead.website && <a href={lead.website} target="_blank" rel="noreferrer" title="Official website"><Globe2 size={13} /><span>Website</span></a>}
-                        {lead.contact_search_url && <a href={lead.contact_search_url} target="_blank" rel="noreferrer" title="Verify this business on Google Maps"><MapPinned size={13} /><span>Verify Maps</span><ExternalLink size={11} /></a>}
+                        <a href={googleMapsVerificationUrl(lead)} target="_blank" rel="noreferrer" title="Verify this exact business on Google Maps"><MapPinned size={13} /><span>Verify Maps</span><ExternalLink size={11} /></a>
                       </div>
                     </div>
                   </td>

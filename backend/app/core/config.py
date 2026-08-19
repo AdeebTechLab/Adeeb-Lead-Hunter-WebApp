@@ -50,6 +50,12 @@ class Settings(BaseSettings):
 
     geoapify_api_key: str = ""
     geoapify_base_url: str = "https://api.geoapify.com"
+    # Optional same-key contact fallback. Place Details is only called for a
+    # small number of leads still missing direct contact after TomTom/website
+    # enrichment because Geoapify bills it at a higher credit cost than Places.
+    geoapify_contact_details_limit: int = 5
+    geoapify_contact_timeout_seconds: float = 8.0
+    geoapify_contact_cache_ttl_seconds: int = 604800
 
     google_places_api_key: str = ""
     google_places_base_url: str = "https://places.googleapis.com/v1"
@@ -59,13 +65,13 @@ class Settings(BaseSettings):
     # it only cross-checks Geoapify/OpenStreetMap results for public phone/website data.
     tomtom_api_key: str = ""
     tomtom_base_url: str = "https://api.tomtom.com"
-    tomtom_contact_enrichment_limit: int = 12
+    tomtom_contact_enrichment_limit: int = 20
     tomtom_contact_match_radius_m: int = 3500
     tomtom_contact_timeout_seconds: float = 8.0
     tomtom_contact_cache_ttl_seconds: int = 604800
 
     enable_website_contact_enrichment: bool = True
-    website_contact_enrichment_limit: int = 10
+    website_contact_enrichment_limit: int = 20
     website_contact_timeout_seconds: float = 6.0
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
@@ -80,6 +86,37 @@ class Settings(BaseSettings):
 
                 return json.loads(value)
             return [item.strip() for item in value.split(",") if item.strip()]
+        return value
+
+
+    @field_validator(
+        "tomtom_contact_enrichment_limit",
+        "tomtom_contact_match_radius_m",
+        "tomtom_contact_timeout_seconds",
+        "tomtom_contact_cache_ttl_seconds",
+        mode="before",
+    )
+    @classmethod
+    def tolerate_tomtom_placeholder_values(cls, value, info):
+        """Do not crash deployment when an env placeholder name was pasted as its value.
+
+        Render users sometimes enter e.g. TOMTOM_CONTACT_TIMEOUT_SECONDS as the
+        value instead of 8. Only blank/self-referential placeholders fall back
+        to safe defaults; genuinely invalid numeric values still fail validation.
+        """
+        defaults = {
+            "tomtom_contact_enrichment_limit": 20,
+            "tomtom_contact_match_radius_m": 3500,
+            "tomtom_contact_timeout_seconds": 8.0,
+            "tomtom_contact_cache_ttl_seconds": 604800,
+        }
+        if value is None:
+            return defaults[info.field_name]
+        if isinstance(value, str):
+            cleaned = value.strip()
+            env_name = info.field_name.upper()
+            if not cleaned or cleaned.upper() in {env_name, f"${{{env_name}}}", f"${env_name}"}:
+                return defaults[info.field_name]
         return value
 
     @model_validator(mode="after")

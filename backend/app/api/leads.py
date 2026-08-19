@@ -21,7 +21,8 @@ from app.providers import provider_status, search_public_businesses
 from app.providers.common import ProviderError
 from app.services.activity import create_admin_notification, create_notification, log_activity
 from app.services.audit import UnsafeURL, audit_website
-from app.services.contact_enrichment import enrich_single_lead, finalise_contact_metadata
+from app.services.contact_enrichment import enrich_search_items, enrich_single_lead, finalise_contact_metadata
+from app.services.city_resolution import resolve_city
 from app.services.dedupe import make_dedupe_key, make_identity_keys
 from app.services.scoring import (
     build_outreach,
@@ -142,74 +143,157 @@ def get_provider_status(user: dict = Depends(get_current_user)):
 
 @router.post("/search")
 def search_leads(payload: SearchRequest, user: dict = Depends(get_current_user)):
-    try:
-        result = search_public_businesses(payload.provider, payload.keyword, payload.city, payload.province, payload.limit)
-    except ProviderError as exc:
-        # Never expose raw upstream URLs, status traces or internal exception strings.
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-    except Exception as exc:
-        raise HTTPException(
-            status_code=503,
-            detail="Live business search could not complete. Automatic retries were attempted. Check the API configuration and try again.",
-        ) from exc
+    """Return up to ``payload.limit`` *new* leads for this search.
 
-    # Leads already present in the qualified database are hidden from future searches.
-    # The same production dedupe key used by MongoDB is used here, so search/import stay consistent.
-    normalised_items = []
-    all_candidate_keys: set[str] = set()
-    seen_candidate_keys: set[str] = set()
-    for raw_item in result["items"]:
-        item = finalise_contact_metadata(raw_item)
-        identity_keys = make_identity_keys(item)
-        if not identity_keys:
-            identity_keys = [make_dedupe_key(item)]
-        if seen_candidate_keys.intersection(identity_keys):
-            continue
-        seen_candidate_keys.update(identity_keys)
-        all_candidate_keys.update(identity_keys)
-        item["_identity_keys"] = identity_keys
-        normalised_items.append(item)
+    Qualified leads are filtered globally. If the first provider page contains
+    businesses that are already in MongoDB, later provider pages are scanned
+    automatically until the requested number of unseen businesses is collected
+    or the live source is exhausted. Contact enrichment is intentionally delayed
+    until after this filtering so TomTom/website credits are spent only on leads
+    the user can actually import.
+    """
+    requested = max(1, payload.limit)
+    city_resolution = resolve_city(payload.city, payload.province)
+    search_city = str(city_resolution.get("city") or payload.city).strip()
+    # Pull a wider live page than the UI request, then remove already-qualified
+    # businesses before contact enrichment. This keeps a repeated search moving
+    # forward without forcing the user to change the visible limit.
+    page_size = min(max(requested * 2, 30), 100)
+    max_pages = 20
+    provider_offset = 0
 
-    existing_keys: set[str] = set()
-    if all_candidate_keys:
-        existing_docs = mongo.db.leads.find({
-            "$or": [
-                {"dedupe_key": {"$in": list(all_candidate_keys)}},
-                {"dedupe_aliases": {"$in": list(all_candidate_keys)}},
-            ]
-        })
-        for doc in existing_docs:
-            if doc.get("dedupe_key"):
-                existing_keys.add(doc["dedupe_key"])
-            existing_keys.update(doc.get("dedupe_aliases") or [])
+    prepared_raw: list[dict] = []
+    seen_search_keys: set[str] = set()
+    excluded_existing = 0
+    aggregate_warnings: list[str] = []
+    attributions: list[str] = []
+    endpoints: list[str] = []
+    providers_used: list[str] = []
+    all_pages_cached = True
+    had_provider_page = False
+    pages_scanned = 0
+
+    for _ in range(max_pages):
+        if len(prepared_raw) >= requested:
+            break
+        try:
+            page = search_public_businesses(
+                payload.provider,
+                payload.keyword,
+                search_city,
+                payload.province,
+                page_size,
+                offset=provider_offset,
+                enrich=False,
+            )
+        except ProviderError as exc:
+            if had_provider_page:
+                aggregate_warnings.append("The live source stopped before another full page could be loaded.")
+                break
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except Exception as exc:
+            if had_provider_page:
+                aggregate_warnings.append("The live source stopped before another full page could be loaded.")
+                break
+            raise HTTPException(
+                status_code=503,
+                detail="Live business search could not complete. Automatic retries were attempted. Check the API configuration and try again.",
+            ) from exc
+
+        raw_page = page.get("items") or []
+        had_provider_page = had_provider_page or bool(raw_page)
+        pages_scanned += 1
+        all_pages_cached = all_pages_cached and bool(page.get("cached"))
+        aggregate_warnings.extend(page.get("warnings") or [])
+        if page.get("attribution"):
+            attributions.append(str(page["attribution"]))
+        if page.get("endpoint"):
+            endpoints.append(str(page["endpoint"]))
+        if page.get("provider"):
+            providers_used.append(str(page["provider"]))
+
+        if not raw_page:
+            break
+
+        page_candidates: list[dict] = []
+        page_keys: set[str] = set()
+        for raw_item in raw_page:
+            item = finalise_contact_metadata(raw_item)
+            identity_keys = make_identity_keys(item)
+            if not identity_keys:
+                identity_keys = [make_dedupe_key(item)]
+            identity_keys = [key for key in identity_keys if key]
+            if not identity_keys or seen_search_keys.intersection(identity_keys):
+                continue
+            seen_search_keys.update(identity_keys)
+            page_keys.update(identity_keys)
+            item["_identity_keys"] = identity_keys
+            page_candidates.append(item)
+
+        existing_keys: set[str] = set()
+        if page_keys:
+            existing_docs = mongo.db.leads.find({
+                "$or": [
+                    {"dedupe_key": {"$in": list(page_keys)}},
+                    {"dedupe_aliases": {"$in": list(page_keys)}},
+                ]
+            })
+            for doc in existing_docs:
+                if doc.get("dedupe_key"):
+                    existing_keys.add(doc["dedupe_key"])
+                existing_keys.update(doc.get("dedupe_aliases") or [])
+
+        for item in page_candidates:
+            identity_keys = item.pop("_identity_keys", [])
+            overlap = existing_keys.intersection(identity_keys)
+            if overlap:
+                excluded_existing += 1
+                continue
+            prepared_raw.append(item)
+            if len(prepared_raw) >= requested:
+                break
+
+        # Geoapify uses this as a native offset. OSM emulates the same stable
+        # window locally. Advancing by the requested page size avoids the old
+        # behaviour where changing the UI limit was the only way to see new leads.
+        provider_offset += page_size
+
+    used_provider = "+".join(dict.fromkeys(providers_used)) or payload.provider
+    selected_raw = prepared_raw[:requested]
+    if selected_raw:
+        enriched_items, contact_warnings = enrich_search_items(selected_raw, used_provider)
+        aggregate_warnings.extend(contact_warnings)
+    else:
+        enriched_items = []
 
     prepared = []
-    excluded_existing = 0
-    for item in normalised_items:
-        identity_keys = item.pop("_identity_keys", [])
-        if existing_keys.intersection(identity_keys):
-            excluded_existing += 1
-            continue
+    for item in enriched_items:
+        item = finalise_contact_metadata(item)
         item.update(_score_fields(item))
         prepared.append(item)
 
-    used_provider = result.get("provider", payload.provider)
-    cache_label = "cached" if result.get("cached") else "live"
+    if had_provider_page and not prepared and excluded_existing:
+        aggregate_warnings.append("No additional unqualified businesses were found in the available live pages for this search.")
+
+    cache_label = "cached" if all_pages_cached and pages_scanned else "live"
     log_activity(
         user,
         "Searched",
         "Public businesses",
-        detail=f"{payload.keyword} in {payload.city} via {used_provider} ({cache_label})",
+        detail=f"{payload.keyword} in {search_city} via {used_provider} ({cache_label})",
     )
     return {
         "items": prepared,
         "count": len(prepared),
         "excluded_existing": excluded_existing,
         "provider": used_provider,
-        "cached": bool(result.get("cached")),
-        "attribution": result.get("attribution"),
-        "warnings": result.get("warnings", []),
-        "endpoint": result.get("endpoint"),
+        "cached": bool(all_pages_cached and pages_scanned),
+        "attribution": " · ".join(dict.fromkeys(attributions)),
+        "warnings": list(dict.fromkeys(aggregate_warnings)),
+        "endpoint": " + ".join(dict.fromkeys(endpoints)),
+        "pages_scanned": pages_scanned,
+        "resolved_city": search_city,
+        "city_corrected": bool(city_resolution.get("corrected")),
     }
 
 
@@ -389,6 +473,36 @@ def export_leads(
         media_type="text/csv",
         headers={"Content-Disposition": "attachment; filename=qualified-leads.csv"},
     )
+
+
+@router.delete("/{lead_id}")
+def delete_lead(lead_id: str, user: dict = Depends(get_current_user)):
+    lead = _lead_or_404(lead_id, user)
+    lead_name = str(lead.get("business_name") or "Lead")
+
+    # Remove dangling references from saved lists before deleting the lead.
+    for saved_list in mongo.db.lead_lists.find({}):
+        lead_ids = saved_list.get("lead_ids") or []
+        filtered_ids = [value for value in lead_ids if value != lead["_id"]]
+        if len(filtered_ids) != len(lead_ids):
+            mongo.db.lead_lists.update_one(
+                {"_id": saved_list["_id"]},
+                {"$set": {"lead_ids": filtered_ids, "updated_at": datetime.now(timezone.utc)}},
+            )
+
+    result = mongo.db.leads.delete_one({"_id": lead["_id"]})
+    if not getattr(result, "deleted_count", 0):
+        raise HTTPException(status_code=404, detail="Lead not found")
+
+    log_activity(user, "Deleted", "Lead", lead_id, lead_name)
+    if user.get("role") != "admin":
+        create_admin_notification(
+            "Lead deleted",
+            f"{user.get('name', 'User')} deleted {lead_name} from Qualified Leads.",
+            "warning",
+            "/leads",
+        )
+    return {"ok": True, "id": lead_id, "business_name": lead_name}
 
 
 @router.get("/{lead_id}")

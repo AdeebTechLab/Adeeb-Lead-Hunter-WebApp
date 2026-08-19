@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Optional
 import httpx
 
 from app.core.config import settings
-from app.providers.common import ProviderError, ProviderSearchResult
+from app.providers.common import ProviderError, ProviderSearchResult, TTLCache
 
 # Geoapify categories are deliberately broad enough to support the agency's
 # target niches and common Pakistan local-business searches. Unknown custom
@@ -99,6 +99,32 @@ ALIASES = {
 BROAD_LOCAL_BUSINESS_CATEGORIES = "commercial,service,office,catering,healthcare,education,accommodation,sport"
 
 
+_contact_details_cache = TTLCache()
+
+
+def _flatten_strings(value: Any) -> List[str]:
+    values: List[str] = []
+    if isinstance(value, str):
+        if value.strip():
+            values.append(value.strip())
+    elif isinstance(value, dict):
+        # Geoapify can expose international/named variants as a mapping.
+        for nested in value.values():
+            values.extend(_flatten_strings(nested))
+    elif isinstance(value, (list, tuple, set)):
+        for nested in value:
+            values.extend(_flatten_strings(nested))
+    return values
+
+
+def _first_nested(*values: Any) -> Optional[str]:
+    for value in values:
+        flattened = _flatten_strings(value)
+        if flattened:
+            return flattened[0]
+    return None
+
+
 def normalise_keyword(keyword: str) -> str:
     cleaned = re.sub(r"\s+", " ", keyword.strip().lower())
     return ALIASES.get(cleaned, cleaned)
@@ -187,9 +213,25 @@ def _normalise_feature(feature: Dict[str, Any], keyword: str, city: str, provinc
     if not name:
         return None
 
-    phone = _first_text(contact.get("phone"), contact.get("mobile"), _raw_value(raw, "contact:phone", "phone", "contact:mobile"))
-    email = _first_text(contact.get("email"), _raw_value(raw, "contact:email", "email"))
-    website = _first_text(contact.get("website"), _raw_value(raw, "contact:website", "website", "url"))
+    phone = _first_nested(
+        props.get("phone"),
+        props.get("phone_other"),
+        props.get("phone_international"),
+        contact.get("phone"),
+        contact.get("phone_other"),
+        contact.get("phone_international"),
+        contact.get("mobile"),
+        contact.get("telephone"),
+        _raw_value(raw, "contact:phone", "phone", "contact:mobile", "mobile", "telephone", "contact:telephone", "contact:whatsapp", "whatsapp"),
+    )
+    email = _first_nested(
+        props.get("email"), props.get("email_other"), contact.get("email"), contact.get("email_other"),
+        _raw_value(raw, "contact:email", "email"),
+    )
+    website = _first_nested(
+        props.get("website"), props.get("website_other"), contact.get("website"),
+        _raw_value(raw, "contact:website", "website", "url"),
+    )
     facebook = _first_text(contact.get("facebook"), _raw_value(raw, "contact:facebook", "facebook"))
     instagram = _first_text(contact.get("instagram"), _raw_value(raw, "contact:instagram", "instagram"))
     linkedin = _first_text(contact.get("linkedin"), _raw_value(raw, "contact:linkedin", "linkedin"))
@@ -199,7 +241,10 @@ def _normalise_feature(feature: Dict[str, Any], keyword: str, city: str, provinc
     return {
         "business_name": name,
         "category": keyword.strip().title(),
-        "city": _first_text(props.get("city"), city.title()) or city.title(),
+        # Keep the user's resolved search city as the canonical city. Provider
+        # responses sometimes label Lahore/Karachi businesses with an admin
+        # division instead of the actual city name.
+        "city": city.title(),
         "province": _first_text(props.get("state"), province.title()) or province.title(),
         "phone": phone,
         "email": email,
@@ -224,7 +269,84 @@ def _normalise_feature(feature: Dict[str, Any], keyword: str, city: str, provinc
     }
 
 
-def geoapify_search(keyword: str, city: str, province: str, limit: int) -> ProviderSearchResult:
+
+def geoapify_contact_lookup(item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Fetch richer contact fields for an already-discovered Geoapify place.
+
+    This is intentionally not a discovery API. It is a bounded fallback for
+    leads whose v2 Places result omitted contact data even though Geoapify's
+    Place Details record contains it. The same Geoapify API key is used.
+    """
+    if not settings.geoapify_api_key:
+        return None
+    place_id = str(item.get("provider_place_id") or "").strip()
+    if not place_id:
+        return None
+
+    cache_key = f"geoapify-details|{place_id}"
+    cached = _contact_details_cache.get(cache_key)
+    if cached:
+        return dict(cached.get("result") or {}) or None
+
+    timeout = httpx.Timeout(
+        connect=5.0,
+        read=settings.geoapify_contact_timeout_seconds,
+        write=5.0,
+        pool=5.0,
+    )
+    headers = {"User-Agent": settings.public_data_user_agent, "Accept": "application/json"}
+    try:
+        with httpx.Client(timeout=timeout, headers=headers, follow_redirects=True) as client:
+            response = client.get(
+                f"{settings.geoapify_base_url.rstrip('/')}/v2/place-details",
+                params={"id": place_id, "features": "details", "apiKey": settings.geoapify_api_key},
+            )
+            response.raise_for_status()
+            payload = response.json()
+    except (httpx.HTTPError, ValueError, TypeError):
+        _contact_details_cache.set(cache_key, {"result": None}, 300)
+        return None
+
+    feature = next(
+        (row for row in (payload.get("features") or []) if (row.get("properties") or {}).get("feature_type") == "details"),
+        None,
+    )
+    if not feature:
+        _contact_details_cache.set(cache_key, {"result": None}, 300)
+        return None
+
+    props = feature.get("properties") or {}
+    contact = props.get("contact") or {}
+    phone = _first_nested(
+        contact.get("phone"), contact.get("phone_other"), contact.get("phone_international"),
+        props.get("phone"), props.get("phone_other"), props.get("phone_international"),
+    )
+    email = _first_nested(
+        contact.get("email"), contact.get("email_other"), props.get("email"), props.get("email_other"),
+    )
+    website = _first_nested(
+        props.get("website"), props.get("website_other"),
+        (props.get("brand_details") or {}).get("website"),
+        (props.get("operator_details") or {}).get("website"),
+    )
+    if not phone and not email and not website:
+        _contact_details_cache.set(cache_key, {"result": None}, 300)
+        return None
+
+    result = {
+        "phone": phone,
+        "email": email,
+        "website": website,
+        "source": "Geoapify Place Details",
+        "match_confidence": "High",
+        "provider_place_id": place_id,
+    }
+    _contact_details_cache.set(
+        cache_key, {"result": dict(result)}, settings.geoapify_contact_cache_ttl_seconds
+    )
+    return result
+
+def geoapify_search(keyword: str, city: str, province: str, limit: int, offset: int = 0) -> ProviderSearchResult:
     if not settings.geoapify_api_key:
         raise ProviderError("Geoapify is not configured. Add GEOAPIFY_API_KEY in backend/.env.")
     key = normalise_keyword(keyword)
@@ -241,7 +363,11 @@ def geoapify_search(keyword: str, city: str, province: str, limit: int) -> Provi
             "categories": categories,
             "filter": location_filter,
             "bias": f"proximity:{lon},{lat}",
-            "limit": min(max(limit * 2, limit), 80),
+            # Geoapify supports paging with limit + offset. Keeping the page size
+            # predictable lets the API layer continue past already-qualified leads
+            # instead of returning the same first page on every search.
+            "limit": min(max(int(limit), 1), 500),
+            "offset": max(int(offset), 0),
             "lang": "en",
             "apiKey": settings.geoapify_api_key,
         }

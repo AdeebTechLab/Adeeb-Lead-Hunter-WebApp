@@ -181,7 +181,7 @@ def _location(city: str, province: str) -> tuple[float, float, tuple[float, floa
     return result
 
 
-def _build_query(keyword: str, bbox: tuple[float, float, float, float], limit: int) -> str:
+def _build_query(keyword: str, bbox: tuple[float, float, float, float], fetch_count: int) -> str:
     south, west, north, east = bbox
     area = f"({south:.6f},{west:.6f},{north:.6f},{east:.6f})"
     key = normalise_keyword(keyword)
@@ -197,7 +197,8 @@ def _build_query(keyword: str, bbox: tuple[float, float, float, float], limit: i
             raise ProviderError("Enter a valid business keyword.")
         escaped = re.escape(cleaned).replace('"', '\\"')
         selectors.append(f'nwr["name"~"{escaped}",i]{area};')
-    return "[out:json][timeout:28];(" + "".join(selectors) + f");out tags center {min(max(limit * 2, limit), 80)};"
+    safe_count = min(max(int(fetch_count), 20), 300)
+    return "[out:json][timeout:28];(" + "".join(selectors) + f");out tags center {safe_count};"
 
 
 def _fetch_overpass(query: str) -> tuple[List[dict], str, List[str]]:
@@ -270,11 +271,16 @@ def _normalise_item(item: dict, keyword: str, city: str, province: str) -> dict 
     }
 
 
-def osm_search(keyword: str, city: str, province: str, limit: int) -> ProviderSearchResult:
+def osm_search(keyword: str, city: str, province: str, limit: int, offset: int = 0) -> ProviderSearchResult:
     _, _, bbox = _location(city, province)
-    query = _build_query(keyword, bbox, limit)
+    # Overpass has no simple offset parameter. Fetch a stable larger window,
+    # normalise/dedupe it, then slice locally. This keeps OSM as a lightweight
+    # fallback while allowing repeated searches to move past qualified leads.
+    fetch_count = min(max((max(offset, 0) + max(limit, 1)) * 2, 40), 300)
+    query = _build_query(keyword, bbox, fetch_count)
     elements, endpoint, warnings = _fetch_overpass(query)
-    items: List[dict] = []
+    elements = sorted(elements, key=lambda row: (str(row.get("type") or ""), int(row.get("id") or 0)))
+    all_items: List[dict] = []
     seen = set()
     for element in elements:
         item = _normalise_item(element, keyword, city, province)
@@ -284,9 +290,9 @@ def osm_search(keyword: str, city: str, province: str, limit: int) -> ProviderSe
         if key in seen:
             continue
         seen.add(key)
-        items.append(item)
-        if len(items) >= limit:
-            break
+        all_items.append(item)
+    start = max(int(offset), 0)
+    items = all_items[start:start + max(int(limit), 1)]
     return ProviderSearchResult(
         items=items,
         provider="osm",

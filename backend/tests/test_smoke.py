@@ -659,3 +659,344 @@ def test_tomtom_places_discover_contacts_avoid_details_call():
     assert client.post_calls == 1
     assert client.get_calls == 0
 
+
+
+def test_repeated_search_advances_to_later_pages_after_qualified_leads():
+    existing_one = {**LIVE_ITEM, "business_name": "Existing One", "phone": "+92 300 9000001", "address": "One Road, Lahore"}
+    existing_two = {**LIVE_ITEM, "business_name": "Existing Two", "phone": "+92 300 9000002", "address": "Two Road, Lahore"}
+    fresh_one = {**LIVE_ITEM, "business_name": "Fresh One", "phone": "+92 300 9000003", "address": "Three Road, Lahore"}
+    fresh_two = {**LIVE_ITEM, "business_name": "Fresh Two", "phone": "+92 300 9000004", "address": "Four Road, Lahore"}
+
+    offsets = []
+
+    def fake_page(provider, keyword, city, province, limit, offset=0, enrich=True):
+        offsets.append(offset)
+        if offset == 0:
+            items = [existing_one, existing_two]
+        elif offset == 30:
+            items = [fresh_one, fresh_two]
+        else:
+            items = []
+        return {
+            "items": items,
+            "provider": "geoapify",
+            "cached": False,
+            "attribution": "Geoapify",
+            "warnings": [],
+            "endpoint": "Geoapify Places API",
+        }
+
+    with TestClient(app) as client:
+        headers = _login(client)
+        assert client.post("/api/leads", headers=headers, json=existing_one).status_code == 200
+        assert client.post("/api/leads", headers=headers, json=existing_two).status_code == 200
+        with patch("app.api.leads.search_public_businesses", side_effect=fake_page):
+            response = client.post(
+                "/api/leads/search",
+                headers=headers,
+                json={"keyword": "Restaurant", "city": "Lahore", "province": "Punjab", "provider": "auto", "limit": 2},
+            )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert [item["business_name"] for item in payload["items"]] == ["Fresh One", "Fresh Two"]
+    assert payload["excluded_existing"] == 2
+    assert offsets[:2] == [0, 30]
+
+
+def test_geoapify_search_uses_native_limit_and_offset_paging():
+    from app.providers.geoapify import geoapify_search
+
+    seen_params = {}
+
+    def fake_places(client, url, params):
+        seen_params.update(params)
+        return {"features": []}
+
+    with patch("app.providers.geoapify.settings.geoapify_api_key", "configured"), \
+         patch("app.providers.geoapify.geocode_city", return_value={"place_id": "city-1", "lat": 31.52, "lon": 74.35}), \
+         patch("app.providers.geoapify._request_json", side_effect=fake_places):
+        result = geoapify_search("Restaurant", "Lahore", "Punjab", 20, offset=40)
+
+    assert result.items == []
+    assert seen_params["limit"] == 20
+    assert seen_params["offset"] == 40
+
+
+def test_provider_cache_separates_paging_offsets():
+    from app.providers import search_public_businesses
+    from app.providers.common import ProviderSearchResult
+
+    result = ProviderSearchResult(
+        items=[LIVE_ITEM],
+        provider="osm",
+        attribution="© OpenStreetMap contributors",
+        endpoint="paged-overpass",
+    )
+    with patch("app.providers.osm_search", return_value=result) as mocked:
+        search_public_businesses("osm", "Restaurant", "Paging Cache City", "Punjab", 1, offset=0, enrich=False)
+        search_public_businesses("osm", "Restaurant", "Paging Cache City", "Punjab", 1, offset=1, enrich=False)
+        search_public_businesses("osm", "Restaurant", "Paging Cache City", "Punjab", 1, offset=0, enrich=False)
+    assert mocked.call_count == 2
+
+
+def test_city_resolution_corrects_small_typo_without_network():
+    from app.services.city_resolution import resolve_city
+
+    result = resolve_city("Lahroe", "Punjab")
+    assert result["city"] == "Lahore"
+    assert result["corrected"] is True
+
+
+def test_tomtom_branch_label_matches_same_nearby_business():
+    from app.providers.tomtom import _best_accepted
+
+    item = {
+        "business_name": "Pak Tea House Actual Location",
+        "city": "Lahore",
+        "latitude": 31.5204,
+        "longitude": 74.3587,
+    }
+    result = {
+        "type": "POI",
+        "id": "pak-tea",
+        "poi": {"name": "Pak Tea House", "phone": "+92 42 38089841", "url": None},
+        "position": {"lat": 31.52045, "lon": 74.35875},
+        "address": {"municipality": "Lahore", "freeformAddress": "Lahore, Pakistan"},
+    }
+    matched = _best_accepted(item, [result])
+    assert matched is not None
+    assert matched["poi"]["phone"] == "+92 42 38089841"
+
+
+def test_tomtom_details_called_when_discover_has_website_but_no_phone():
+    from app.providers.tomtom import _candidate_with_contacts
+
+    class FakeResponse:
+        def __init__(self, payload):
+            self.payload = payload
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return self.payload
+
+    class FakeClient:
+        def __init__(self):
+            self.get_calls = 0
+
+        def post(self, endpoint, json=None, headers=None):
+            return FakeResponse({
+                "results": [{
+                    "type": "poi",
+                    "id": "same-poi",
+                    "title": "Same Business",
+                    "position": {"type": "Point", "coordinates": [74.3588, 31.5205]},
+                    "address": {"municipality": "Lahore"},
+                    "contacts": [{"type": "default", "websites": ["https://same.example"]}],
+                }]
+            })
+
+        def get(self, endpoint, params=None, headers=None):
+            self.get_calls += 1
+            return FakeResponse({
+                "type": "poi",
+                "id": "same-poi",
+                "title": "Same Business",
+                "position": {"type": "Point", "coordinates": [74.3588, 31.5205]},
+                "address": {"municipality": "Lahore"},
+                "contacts": [{"type": "default", "phones": ["+92 300 1234567"], "websites": ["https://same.example"]}],
+            })
+
+    client = FakeClient()
+    item = {"business_name": "Same Business", "city": "Lahore", "latitude": 31.5204, "longitude": 74.3587}
+    with patch("app.providers.tomtom.settings.tomtom_api_key", "places-key"):
+        matched = _candidate_with_contacts(client, item)
+    assert matched is not None
+    assert matched["poi"]["phone"] == "+92 300 1234567"
+    assert client.get_calls == 1
+
+
+def test_tomtom_placeholder_timeout_value_falls_back_to_numeric_default():
+    from app.core.config import Settings
+
+    configured = Settings(_env_file=None, tomtom_contact_timeout_seconds="TOMTOM_CONTACT_TIMEOUT_SECONDS")
+    assert configured.tomtom_contact_timeout_seconds == 8.0
+
+
+def test_google_maps_metadata_overrides_legacy_osm_contact_link():
+    from app.services.contact_enrichment import finalise_contact_metadata
+
+    item = finalise_contact_metadata({
+        "business_name": "Waqas Biryani",
+        "address": "Kacha Hall Road, Lahore",
+        "city": "Lahore",
+        "province": "Punjab",
+        "latitude": 31.5643017,
+        "longitude": 74.3207201,
+        "source_url": "https://www.openstreetmap.org/node/5793097159",
+        "contact_search_url": "https://www.openstreetmap.org/node/5793097159",
+        "google_business_url": None,
+    })
+    assert item["contact_search_url"].startswith("https://www.google.com/maps/search/?api=1&query=")
+    assert "openstreetmap.org" not in item["contact_search_url"]
+    assert "Waqas+Biryani" in item["contact_search_url"]
+
+
+def test_cold_call_is_roman_urdu_while_other_outreach_stays_english():
+    from app.services.scoring import build_outreach
+
+    outreach = build_outreach(
+        {**LIVE_ITEM, "business_name": "Roman Script Restaurant", "phone": "+92 300 9999999"},
+        "Website Development",
+        ["Website missing", "WhatsApp conversion path missing"],
+    )
+    cold = outreach["cold_call"]
+    assert "CALL SE PEHLE" in cold
+    assert "website maujood nahin hai" in cold
+    assert "kya meri baat" in cold
+    assert "Aap ke zyada tar naye customers" in cold
+    assert "Would a 15-minute review" in outreach["email"]
+    assert "Primary objective:" in outreach["call_plan"]
+
+
+def test_qualified_lead_can_be_deleted_and_can_reappear_in_search():
+    provider_result = {
+        "items": [LIVE_ITEM],
+        "provider": "osm",
+        "cached": False,
+        "attribution": "© OpenStreetMap contributors",
+        "warnings": [],
+        "endpoint": "https://overpass.example/api/interpreter",
+    }
+    with TestClient(app) as client, patch("app.api.leads.search_public_businesses", return_value=provider_result):
+        headers = _login(client)
+        request = {"keyword": "Restaurant", "city": "Lahore", "province": "Punjab", "provider": "auto", "limit": 3}
+        first = client.post("/api/leads/search", headers=headers, json=request).json()
+        imported = client.post("/api/leads/bulk", headers=headers, json={"leads": first["items"]}).json()
+        lead_id = imported["items"][0]["id"]
+
+        deleted = client.delete(f"/api/leads/{lead_id}", headers=headers)
+        assert deleted.status_code == 200, deleted.text
+        assert deleted.json()["ok"] is True
+        assert client.get(f"/api/leads/{lead_id}", headers=headers).status_code == 404
+
+        repeated = client.post("/api/leads/search", headers=headers, json=request)
+        assert repeated.status_code == 200
+        assert repeated.json()["count"] == 1
+
+
+def test_delete_lead_removes_saved_list_reference():
+    with TestClient(app) as client:
+        headers = _login(client)
+        lead = client.post(
+            "/api/leads",
+            headers=headers,
+            json={**LIVE_ITEM, "business_name": "Delete From List Lead", "phone": "+92 300 1212121"},
+        ).json()
+        saved = client.post(
+            "/api/lists",
+            headers=headers,
+            json={"name": "Deletion Test", "description": ""},
+        ).json()
+        added = client.post(
+            f"/api/lists/{saved['id']}/leads",
+            headers=headers,
+            json={"lead_id": lead["id"]},
+        )
+        assert added.status_code == 200
+        assert added.json()["lead_count"] == 1
+
+        deleted = client.delete(f"/api/leads/{lead['id']}", headers=headers)
+        assert deleted.status_code == 200
+        refreshed = client.get("/api/lists", headers=headers).json()["items"]
+        target = next(item for item in refreshed if item["id"] == saved["id"])
+        assert target["lead_count"] == 0
+        assert target["leads"] == []
+
+
+def test_tomtom_places_contact_parser_is_forward_compatible():
+    from app.providers.tomtom import _first_contact
+
+    phone, website = _first_contact({
+        "contacts": [
+            {
+                "type": "default",
+                "phones": [{"value": "+92 42 35700000"}],
+                "websites": [{"url": "https://example.pk"}],
+            }
+        ]
+    })
+    assert phone == "+92 42 35700000"
+    assert website == "https://example.pk"
+
+
+def test_tomtom_nearby_branch_name_can_match_when_address_agrees():
+    from app.providers.tomtom import _best_accepted, _normalise_places_result
+
+    item = {
+        "business_name": "Sea Hawk Family Restaurant",
+        "city": "Lahore",
+        "address": "Sheikh Abdul Qadir Jillani Road, Sant Nagar, Lahore",
+        "latitude": 31.56430,
+        "longitude": 74.32072,
+    }
+    raw = {
+        "id": "branch-1",
+        "type": "poi",
+        "title": "Sea Hawk Restaurant",
+        "position": {"type": "Point", "coordinates": [74.32075, 31.56432]},
+        "subtitles": ["Sheikh Abdul Qadir Jillani Road", "Lahore", "Pakistan"],
+        "address": {"municipality": "Lahore", "street": "Sheikh Abdul Qadir Jillani Road"},
+        "contacts": [{"phones": ["+92 42 30000000"]}],
+    }
+    match = _best_accepted(item, [_normalise_places_result(raw)])
+    assert match is not None
+    assert match["poi"]["phone"] == "+92 42 30000000"
+    assert match["_match"]["distance"] < 10
+
+
+def test_geoapify_place_details_extracts_richer_contact_fields():
+    import app.providers.geoapify as geo
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "features": [{
+                    "properties": {
+                        "feature_type": "details",
+                        "contact": {
+                            "phone": "+92 42 11111111",
+                            "phone_other": ["+92 300 2222222"],
+                            "email": "hello@example.pk",
+                        },
+                        "website": "https://example.pk",
+                    }
+                }]
+            }
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def get(self, *args, **kwargs):
+            assert kwargs["params"]["id"] == "geo-place-unique-test"
+            assert kwargs["params"]["features"] == "details"
+            return FakeResponse()
+
+    with patch.object(geo.settings, "geoapify_api_key", "geo-key"), patch.object(geo.httpx, "Client", FakeClient):
+        result = geo.geoapify_contact_lookup({"provider_place_id": "geo-place-unique-test"})
+    assert result["phone"] == "+92 42 11111111"
+    assert result["email"] == "hello@example.pk"
+    assert result["website"] == "https://example.pk"
+    assert result["source"] == "Geoapify Place Details"
