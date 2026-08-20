@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 
 from app.core.database import mongo
 from app.core.dependencies import get_current_user
@@ -26,8 +26,23 @@ def _lead_view(item: dict) -> dict:
 
 
 @router.get("/dashboard")
-def dashboard(user: dict = Depends(get_current_user)):
+def dashboard(
+    period: str = Query("all", description="all, month or custom"),
+    start_date: str | None = Query(None),
+    end_date: str | None = Query(None),
+    user: dict = Depends(get_current_user),
+):
     scope = _scope(user)
+    date_filter = {}
+    now = datetime.now(timezone.utc)
+    if period == "month":
+        date_filter = {"created_at": {"$gte": now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)}}
+    elif period == "custom" and start_date and end_date:
+        try:
+            date_filter = {"created_at": {"$gte": datetime.fromisoformat(start_date).replace(tzinfo=timezone.utc), "$lte": datetime.fromisoformat(end_date).replace(tzinfo=timezone.utc)}}
+        except ValueError:
+            date_filter = {}
+    scope = _merge(scope, date_filter)
     total = mongo.db.leads.count_documents(scope)
     hot = mongo.db.leads.count_documents(_merge(scope, {"priority": "Hot"}))
     followups = mongo.db.leads.count_documents(_merge(scope, {"status": "Follow-up"}))
