@@ -93,7 +93,7 @@ function suggestions(values: string[], query: string, max = 8) {
 }
 
 export default function LeadHunterPage() {
-  const [form, setForm] = useState({ keyword: 'Restaurant', city: 'Lahore', limit: '20' })
+  const [form, setForm] = useState({ keyword: 'Restaurant', city: 'Lahore', limit: '' })
   const [items, setItems] = useState<Lead[]>([])
   const [meta, setMeta] = useState<Omit<SearchResponse, 'items' | 'count' | 'excluded_existing'> | null>(null)
   const [contactEnrichment, setContactEnrichment] = useState({ tomtom: false, website: true, google: false })

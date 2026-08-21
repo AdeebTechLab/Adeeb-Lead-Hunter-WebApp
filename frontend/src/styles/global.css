@@ -1051,23 +1051,15 @@ select:-webkit-autofill {
   margin-top: 16px;
 }
 
-
-/* Theme safe browser autofill fix */
+/* Fix browser autofill overriding dark theme inputs */
 input:-webkit-autofill,
 input:-webkit-autofill:hover,
 input:-webkit-autofill:focus,
 textarea:-webkit-autofill,
 select:-webkit-autofill {
-  -webkit-text-fill-color: #f7f7f7 !important;
-  caret-color: #f7f7f7 !important;
-  -webkit-box-shadow: 0 0 0px 1000px #17212b inset !important;
-  box-shadow: 0 0 0px 1000px #17212b inset !important;
+  -webkit-text-fill-color: var(--text) !important;
+  -webkit-box-shadow: 0 0 0px 1000px var(--card) inset !important;
+  box-shadow: 0 0 0px 1000px var(--card) inset !important;
+  caret-color: var(--text) !important;
   transition: background-color 9999s ease-out 0s;
-}
-
-input,
-textarea,
-select {
-  color: #f7f7f7;
-  caret-color: #f7f7f7;
 }
