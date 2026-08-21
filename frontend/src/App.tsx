@@ -28,6 +28,7 @@ export default function App() {
       <Route path="/signup" element={user ? <Navigate to="/" replace /> : <AuthPage mode="signup" />} />
       <Route element={<ProtectedLayout />}>
         <Route path="/" element={<DashboardPage />} />
+        <Route path="/dashboard" element={<DashboardPage />} />
         <Route path="/hunter" element={<LeadHunterPage />} />
         <Route path="/leads" element={<LeadsPage />} />
         <Route path="/leads/:leadId" element={<LeadsPage />} />

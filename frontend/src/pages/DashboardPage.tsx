@@ -59,7 +59,6 @@ export default function DashboardPage() {
   const [toDate, setToDate] = useState(isoToday())
   const [monthValue, setMonthValue] = useState(isoMonth())
   const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
   const { refreshKey } = useRefresh()
   const { user } = useAuth()
 
@@ -76,42 +75,30 @@ export default function DashboardPage() {
   useEffect(() => {
     let active = true
     setLoading(true)
-    setError(null)
     api<DashboardData>(dashboardPath)
       .then((result) => { if (active) setData(result) })
-      .catch((error) => { setError(error.message); toast.error(error.message) })
+      .catch((error) => toast.error(error.message))
       .finally(() => { if (active) setLoading(false) })
     return () => { active = false }
   }, [dashboardPath, refreshKey])
 
-  if (!data && !error) return <section className="card"><Loader /><p>Loading dashboard data...</p></section>
-  if (!data && error) return <section className="card dashboard-error"><h2>Unable to load dashboard</h2><p>{error}</p><button type="button" onClick={() => window.location.reload()}>Retry</button></section>
-
-  const dashboardData = data || {
-    stats: { total_leads: 0, hot_leads: 0, follow_ups: 0, completed_deals: 0, cancelled_deals: 0, conversion_rate: 0, new_this_week: 0, scope: 'workspace' as const },
-    period: { mode: period as PeriodMode, label: 'Dashboard', trend_granularity: 'day' as const },
-    trend: [],
-    pipeline: [],
-    services: [],
-    recent_leads: [],
-    top_leads: [],
-  }
+  if (!data) return <Loader />
 
   const cards = [
-    { label: 'Total leads', value: dashboardData.stats.total_leads, icon: UsersRound, note: `${dashboardData.stats.new_this_week} this week` },
-    { label: 'Hot leads', value: dashboardData.stats.hot_leads, icon: Flame, note: 'Priority queue' },
-    { label: 'Follow-ups', value: dashboardData.stats.follow_ups, icon: ListChecks, note: 'CRM pipeline' },
-    { label: 'Completed', value: dashboardData.stats.completed_deals, icon: CircleCheckBig, note: 'Deals won' },
-    { label: 'Cancelled', value: dashboardData.stats.cancelled_deals, icon: Ban, note: 'Deals not won' },
-    { label: 'Conversion', value: `${dashboardData.stats.conversion_rate}%`, icon: Percent, note: 'Completed vs contacted' },
+    { label: 'Total leads', value: data.stats.total_leads, icon: UsersRound, note: `${data.stats.new_this_week} this week` },
+    { label: 'Hot leads', value: data.stats.hot_leads, icon: Flame, note: 'Priority queue' },
+    { label: 'Follow-ups', value: data.stats.follow_ups, icon: ListChecks, note: 'CRM pipeline' },
+    { label: 'Completed', value: data.stats.completed_deals, icon: CircleCheckBig, note: 'Deals won' },
+    { label: 'Cancelled', value: data.stats.cancelled_deals, icon: Ban, note: 'Deals not won' },
+    { label: 'Conversion', value: `${data.stats.conversion_rate}%`, icon: Percent, note: 'Completed vs contacted' },
   ]
 
   return (
     <>
       <section className="card dashboard-period-card">
         <div className="dashboard-period-heading">
-          <div><span className="eyebrow">Performance period</span><h2>{dashboardData.period.label}</h2></div>
-          <div className="period-summary"><CalendarDays size={16} /><span>{dashboardData.period.from_date && dashboardData.period.to_date ? `${dashboardData.period.from_date} → ${dashboardData.period.to_date}` : 'All available records'}</span></div>
+          <div><span className="eyebrow">Performance period</span><h2>{data.period.label}</h2></div>
+          <div className="period-summary"><CalendarDays size={16} /><span>{data.period.from_date && data.period.to_date ? `${data.period.from_date} → ${data.period.to_date}` : 'All available records'}</span></div>
         </div>
         <div className="dashboard-period-controls" aria-busy={loading}>
           <div className="period-tabs" role="group" aria-label="Dashboard period">
@@ -144,11 +131,11 @@ export default function DashboardPage() {
 
       <div className="dashboard-grid">
         <section className="card chart-card span-2">
-          <div className="card-header"><div><span className="eyebrow">{dashboardData.period.trend_granularity === 'month' ? 'Monthly trend' : 'Period trend'}</span><h2>Leads over time</h2></div></div>
+          <div className="card-header"><div><span className="eyebrow">{data.period.trend_granularity === 'month' ? 'Monthly trend' : 'Period trend'}</span><h2>Leads over time</h2></div></div>
           <div className="chart-box">
-            {dashboardData.trend.length ? (
+            {data.trend.length ? (
               <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={dashboardData.trend} margin={{ left: -20, right: 8 }}>
+                <LineChart data={data.trend} margin={{ left: -20, right: 8 }}>
                   <CartesianGrid strokeDasharray="3 3" vertical={false} />
                   <XAxis dataKey="name" tickLine={false} axisLine={false} fontSize={11} />
                   <YAxis tickLine={false} axisLine={false} fontSize={11} allowDecimals={false} />
@@ -164,14 +151,14 @@ export default function DashboardPage() {
         <section className="card priority-card">
           <div className="card-header"><div><span className="eyebrow">Priority</span><h2>Top prospects</h2></div><Target size={20} /></div>
           <div className="priority-list">
-            {dashboardData.top_leads.map((lead) => (
+            {data.top_leads.map((lead) => (
               <button key={lead.id} onClick={() => setSelected(lead.id || null)}>
                 <div className={`mini-score score-${lead.priority.toLowerCase()}`}>{lead.lead_score}</div>
                 <div><strong>{lead.business_name}</strong><span>{lead.city} · {lead.recommended_service}{user?.role === 'admin' && lead.created_by_name ? ` · ${lead.created_by_name}` : ''}</span></div>
                 <ArrowUpRight size={16} />
               </button>
             ))}
-            {!dashboardData.top_leads.length && <div className="small-empty">No prospects in this period</div>}
+            {!data.top_leads.length && <div className="small-empty">No prospects in this period</div>}
           </div>
         </section>
 
@@ -179,7 +166,7 @@ export default function DashboardPage() {
           <div className="card-header"><div><span className="eyebrow">Pipeline</span><h2>Lead progress</h2></div></div>
           <div className="chart-box compact-chart">
             <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={dashboardData.pipeline} margin={{ left: -20, right: 8 }}>
+              <BarChart data={data.pipeline} margin={{ left: -20, right: 8 }}>
                 <CartesianGrid strokeDasharray="3 3" vertical={false} />
                 <XAxis dataKey="name" tickLine={false} axisLine={false} fontSize={10} />
                 <YAxis tickLine={false} axisLine={false} fontSize={10} allowDecimals={false} />
@@ -195,7 +182,7 @@ export default function DashboardPage() {
           <div className="table-wrap">
             <table>
               <thead><tr><th>Business</th><th>City</th>{user?.role === 'admin' && <th>Created by</th>}<th>Score</th><th>Service</th><th>Status</th></tr></thead>
-              <tbody>{dashboardData.recent_leads.map((lead) => <tr key={lead.id} onClick={() => setSelected(lead.id || null)}><td><strong>{lead.business_name}</strong><span>{lead.category}</span></td><td>{lead.city}</td>{user?.role === 'admin' && <td>{lead.created_by_name || 'Former user'}</td>}<td><StatusBadge value={lead.lead_score} /></td><td>{lead.recommended_service}</td><td><StatusBadge value={lead.status} /></td></tr>)}</tbody>
+              <tbody>{data.recent_leads.map((lead) => <tr key={lead.id} onClick={() => setSelected(lead.id || null)}><td><strong>{lead.business_name}</strong><span>{lead.category}</span></td><td>{lead.city}</td>{user?.role === 'admin' && <td>{lead.created_by_name || 'Former user'}</td>}<td><StatusBadge value={lead.lead_score} /></td><td>{lead.recommended_service}</td><td><StatusBadge value={lead.status} /></td></tr>)}</tbody>
             </table>
           </div>
         </section>
