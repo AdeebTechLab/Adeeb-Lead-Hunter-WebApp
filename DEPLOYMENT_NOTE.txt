@@ -1,0 +1,3 @@
+Production Vercel deployment fix patch.
+Deploy the repository root with this vercel.json or set Vercel Root Directory to frontend.
+Backend remains deployed separately using Render configuration.
