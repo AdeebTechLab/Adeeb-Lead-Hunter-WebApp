@@ -84,10 +84,18 @@ export default function DashboardPage() {
     return () => { active = false }
   }, [dashboardPath, refreshKey])
 
-  if (!data && !error) return <Loader />
+  if (!data && !error) return <section className="card"><Loader /><p>Loading dashboard data...</p></section>
   if (!data && error) return <section className="card dashboard-error"><h2>Unable to load dashboard</h2><p>{error}</p><button type="button" onClick={() => window.location.reload()}>Retry</button></section>
 
-  const dashboardData = data!
+  const dashboardData = data || {
+    stats: { total_leads: 0, hot_leads: 0, follow_ups: 0, completed_deals: 0, cancelled_deals: 0, conversion_rate: 0, new_this_week: 0, scope: 'workspace' as const },
+    period: { mode: period as PeriodMode, label: 'Dashboard', trend_granularity: 'day' as const },
+    trend: [],
+    pipeline: [],
+    services: [],
+    recent_leads: [],
+    top_leads: [],
+  }
 
   const cards = [
     { label: 'Total leads', value: dashboardData.stats.total_leads, icon: UsersRound, note: `${dashboardData.stats.new_this_week} this week` },
