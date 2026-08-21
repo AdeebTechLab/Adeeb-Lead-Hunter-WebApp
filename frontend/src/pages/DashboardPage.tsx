@@ -106,7 +106,7 @@ export default function DashboardPage() {
           top_leads: Array.isArray(result?.top_leads) ? result.top_leads : [],
         } as DashboardData
         setData(safeResult)
-      }
+      })
       .catch((error) => { setError(error.message); toast.error(error.message) })
       .finally(() => { if (active) setLoading(false) })
     return () => { active = false }
