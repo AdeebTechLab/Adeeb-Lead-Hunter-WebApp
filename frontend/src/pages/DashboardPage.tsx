@@ -30,15 +30,12 @@ type DashboardData = {
 export default function DashboardPage() {
   const [data, setData] = useState<DashboardData | null>(null)
   const [selected, setSelected] = useState<string | null>(null)
-  const [period, setPeriod] = useState('all')
-  const [fromDate, setFromDate] = useState('')
-  const [toDate, setToDate] = useState('')
   const { refreshKey } = useRefresh()
   const { user } = useAuth()
 
   useEffect(() => {
-    api<DashboardData>(`/dashboard?period=${period}${period === 'custom' ? `&start_date=${fromDate}&end_date=${toDate}` : ''}`).then(setData).catch((error) => toast.error(error.message))
-  }, [refreshKey, period, fromDate, toDate])
+    api<DashboardData>('/dashboard').then(setData).catch((error) => toast.error(error.message))
+  }, [refreshKey])
 
   if (!data) return <Loader />
 
@@ -53,16 +50,6 @@ export default function DashboardPage() {
 
   return (
     <>
-      <section className="card dashboard-filter-bar">
-        <div className="card-header"><div><span className="eyebrow">Timeline</span><h2>Dashboard period</h2></div></div>
-        <div className="filter-row">
-          <select value={period} onChange={(e) => setPeriod(e.target.value)}>
-            <option value="all">All time</option><option value="month">This month</option><option value="custom">Date range</option>
-          </select>
-          {period === 'custom' && <><input type="date" value={fromDate} onChange={(e)=>setFromDate(e.target.value)} /><input type="date" value={toDate} onChange={(e)=>setToDate(e.target.value)} /></>}
-          <strong>{rangeLabel}</strong>
-        </div>
-      </section>
       <div className="metric-grid dashboard-metrics">
         {cards.map(({ label, value, icon: Icon, note }) => (
           <article className="metric-card" key={label}>

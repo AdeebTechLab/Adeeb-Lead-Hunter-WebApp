@@ -94,9 +94,9 @@ class PasswordResetRequest(BaseModel):
 class SearchRequest(BaseModel):
     keyword: str = Field(min_length=2, max_length=100)
     city: str = Field(min_length=2, max_length=80)
-    province: str = Field(default="", max_length=80)
+    province: str = Field(default="Punjab", max_length=80)
     provider: ProviderId = "auto"
-    limit: int = Field(default=12, ge=1, le=100)
+    limit: int = Field(ge=1, le=100)
 
 
 class LeadCreateRequest(BaseModel):

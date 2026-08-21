@@ -94,7 +94,7 @@ def _geoapify_city(city: str, province: str) -> str | None:
     if not settings.geoapify_api_key:
         return None
     params = {
-        "text": ", ".join(part for part in [city, province, "Pakistan"] if str(part or "").strip()),
+        "text": f"{city}, {province}, Pakistan",
         "type": "city",
         "filter": "countrycode:pk",
         "limit": 5,
@@ -126,42 +126,25 @@ def _geoapify_city(city: str, province: str) -> str | None:
     return best[1] if best and best[0] >= 0.58 else None
 
 
-def resolve_city(city: str, province: str = "") -> dict:
-    """Resolve common Pakistan city spelling mistakes and infer its province.
-
-    Province is intentionally optional because the Lead Hunter UI no longer asks
-    users to select it. Known-city matches are resolved locally; Geoapify is used
-    only when the city is not confidently known.
-    """
+def resolve_city(city: str, province: str) -> dict:
+    """Resolve small city spelling errors without silently changing unrelated input."""
     entered = re.sub(r"\s+", " ", city.strip())
-    province = re.sub(r"\s+", " ", (province or "").strip())
     if not entered:
-        return {"city": city, "province": province, "corrected": False, "source": "input"}
+        return {"city": city, "corrected": False, "source": "input"}
 
     local_city, local_score = _local_best(entered, province)
-    if _key(local_city) == _key(entered) or local_score >= 0.80:
-        inferred = CITY_PROVINCES.get(local_city, province)
-        return {
-            "city": local_city,
-            "province": inferred,
-            "corrected": _key(local_city) != _key(entered) or local_city != entered,
-            "source": "local",
-        }
+    if _key(local_city) == _key(entered):
+        return {"city": local_city, "corrected": local_city != entered, "source": "local"}
+    # A high local score handles common transpositions such as Lahroe -> Lahore
+    # without spending an API request.
+    if local_score >= 0.80:
+        return {"city": local_city, "corrected": True, "source": "local"}
 
     remote = _geoapify_city(entered, province)
     if remote:
-        inferred = CITY_PROVINCES.get(remote, province)
-        return {
-            "city": remote,
-            "province": inferred,
-            "corrected": _key(remote) != _key(entered),
-            "source": "geoapify",
-        }
+        return {"city": remote, "corrected": _key(remote) != _key(entered), "source": "geoapify"}
 
+    # For borderline small typos, use the local suggestion only when still close.
     if local_score >= 0.72:
-        inferred = CITY_PROVINCES.get(local_city, province)
-        return {"city": local_city, "province": inferred, "corrected": True, "source": "local"}
-
-    # Unknown cities are still allowed for manual entry. The provider geocoder will
-    # validate them. Leaving province blank avoids forcing a wrong Punjab filter.
-    return {"city": entered.title(), "province": province, "corrected": False, "source": "input"}
+        return {"city": local_city, "corrected": True, "source": "local"}
+    return {"city": entered.title(), "corrected": False, "source": "input"}

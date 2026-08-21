@@ -31,8 +31,8 @@ CATEGORY_FILTERS: Dict[str, Sequence[Tuple[str, Sequence[str]]]] = {
     "tuition center": (("amenity", ("training",)), ("office", ("educational_institution",))),
     "coaching center": (("amenity", ("training",)), ("office", ("educational_institution",))),
     "daycare": (("amenity", ("kindergarten", "childcare")),),
-    "gym": (("leisure", ("fitness_centre",)), ("sport", ("fitness", "gym"))),
-    "fitness center": (("leisure", ("fitness_centre",)), ("sport", ("fitness", "gym"))),
+    "gym": (("leisure", ("fitness_centre", "sports_centre")), ("sport", ("fitness", "gym"))),
+    "fitness center": (("leisure", ("fitness_centre", "sports_centre")),),
     "hotel": (("tourism", ("hotel", "guest_house", "motel")),),
     "guest house": (("tourism", ("guest_house", "hotel")),),
     "beauty salon": (("shop", ("beauty", "hairdresser")),),
@@ -59,11 +59,6 @@ CATEGORY_FILTERS: Dict[str, Sequence[Tuple[str, Sequence[str]]]] = {
     "boutique": (("shop", ("clothes",)),),
     "electronics store": (("shop", ("electronics", "computer", "mobile_phone")),),
     "furniture store": (("shop", ("furniture",)),),
-    "wedding hall": (("amenity", ("events_venue",)), ("leisure", ("events_venue",)), ("building", ("civic",))),
-    "banquet hall": (("amenity", ("events_venue",)), ("leisure", ("events_venue",))),
-    "event planner": (("office", ("company",)),),
-    "photographer": (("shop", ("photo",)), ("craft", ("photographer",))),
-    "construction company": (("office", ("company",)), ("craft", ("builder",))),
     "courier": (("office", ("logistics",)), ("amenity", ("post_office",))),
     "logistics": (("office", ("logistics",)),),
     "coworking space": (("office", ("coworking",)),),
@@ -155,7 +150,7 @@ def _location(city: str, province: str) -> tuple[float, float, tuple[float, floa
         if wait > 0:
             time.sleep(wait)
         params = {
-            "q": ", ".join(part for part in [city, province, "Pakistan"] if str(part or "").strip()),
+            "q": f"{city}, {province}, Pakistan",
             "countrycodes": "pk",
             "format": "jsonv2",
             "limit": 1,
@@ -273,8 +268,6 @@ def _normalise_item(item: dict, keyword: str, city: str, province: str) -> dict 
         "contact_sources": ["OpenStreetMap"] if phone or email or website else [],
         "contact_confidence": "Medium" if phone or email else "Low",
         "contact_status": "Contactable" if phone or email else "Website available" if website else "Research needed",
-        "_provider_categories": [],
-        "_provider_tags": tags,
     }
 
 

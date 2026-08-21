@@ -254,15 +254,15 @@ def _places_headers(attributes: str, session_id: Optional[str] = None) -> Dict[s
     return headers
 
 
-def _discover_body(item: Dict[str, Any], *, broad: bool = False) -> Dict[str, Any]:
+def _discover_body(item: Dict[str, Any]) -> Dict[str, Any]:
     name = str(item.get("business_name") or "").strip()
     address = str(item.get("address") or "").strip()
     city = str(item.get("city") or "").strip()
     province = str(item.get("province") or "").strip()
-    # First try the exact identity. If that produces no accepted match, a second
-    # name+city request is allowed inside the same coordinate radius. This helps
-    # when provider address wording differs without accepting a nearby business.
-    query = ", ".join(part for part in ([name, city, province] if broad else [name, address or city, province]) if part)
+    # Use the discovered identity plus its address/city. Coordinates still
+    # constrain the candidate set, while the extra address text helps TomTom
+    # distinguish same-name branches and improves contact matching coverage.
+    query = ", ".join(part for part in [name, address or city, province] if part)
     body: Dict[str, Any] = {
         "query": query,
         "maxResults": 8,
@@ -288,12 +288,12 @@ def _discover_body(item: Dict[str, Any], *, broad: bool = False) -> Dict[str, An
     return body
 
 
-def _discover(client: httpx.Client, item: Dict[str, Any], session_id: str, *, broad: bool = False) -> list[Dict[str, Any]]:
+def _discover(client: httpx.Client, item: Dict[str, Any], session_id: str) -> list[Dict[str, Any]]:
     endpoint = f"{settings.tomtom_base_url.rstrip('/')}/maps/orbis/places/discover"
     try:
         response = client.post(
             endpoint,
-            json=_discover_body(item, broad=broad),
+            json=_discover_body(item),
             headers=_places_headers(_DISCOVER_ATTRIBUTES, session_id),
         )
         response.raise_for_status()
@@ -339,8 +339,6 @@ def _candidate_with_contacts(client: httpx.Client, item: Dict[str, Any]) -> Opti
 
     session_id = str(uuid.uuid4())
     best = _best_accepted(item, _discover(client, item, session_id))
-    if best is None:
-        best = _best_accepted(item, _discover(client, item, session_id, broad=True))
     if best is None:
         return None
 
