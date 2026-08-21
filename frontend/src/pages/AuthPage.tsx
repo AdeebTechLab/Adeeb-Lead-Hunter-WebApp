@@ -1,4 +1,4 @@
-import { ArrowRight, Bot, Eye, EyeOff, IdCard, LockKeyhole, Mail, MapPin, UserRound } from 'lucide-react'
+import { ArrowRight, Bot, Eye, EyeOff, IdCard, LoaderCircle, LockKeyhole, Mail, MapPin, UserRound } from 'lucide-react'
 import { FormEvent, useCallback, useState } from 'react'
 import toast from 'react-hot-toast'
 import { Link, useNavigate } from 'react-router-dom'
@@ -51,7 +51,7 @@ export default function AuthPage({ mode }: { mode: 'login' | 'signup' }) {
         </div>
       </section>
       <section className={`auth-panel auth-form-panel ${mode === 'signup' ? 'signup-panel' : ''}`}>
-        <form className="auth-form" onSubmit={submit}>
+        <form className={`auth-form ${loading ? 'is-submitting' : ''}`} onSubmit={submit} aria-busy={loading}>
           <div>
             <span className="eyebrow">{mode === 'login' ? 'Workspace access' : 'New account'}</span>
             <h2>{mode === 'login' ? 'Sign in' : 'Create account'}</h2>
@@ -66,7 +66,7 @@ export default function AuthPage({ mode }: { mode: 'login' | 'signup' }) {
           <label>Email<div className="input-with-icon"><Mail size={18} /><input type="email" required value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder="name@company.com" /></div></label>
           <label>Password<div className="input-with-icon"><LockKeyhole size={18} /><input type={showPassword ? 'text' : 'password'} minLength={8} required value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} placeholder="Minimum 8 characters" /><button type="button" onClick={() => setShowPassword((value) => !value)}>{showPassword ? <EyeOff size={17} /> : <Eye size={17} />}</button></div></label>
           {mode === 'signup' && <ProfileImagePicker onChange={onProfileChange} />}
-          <button className="button primary auth-submit" disabled={loading}>{loading ? 'Please wait' : mode === 'login' ? 'Sign in' : 'Create account'}<ArrowRight size={18} /></button>
+          <button className="button primary auth-submit" disabled={loading}>{loading ? <><LoaderCircle className="spin" size={18} /><span>{mode === 'login' ? 'Signing in…' : 'Creating account…'}</span></> : <><span>{mode === 'login' ? 'Sign in' : 'Create account'}</span><ArrowRight size={18} /></>}</button>{loading && <div className="auth-wait-note" role="status">Please wait while we securely process your request.</div>}
           <p className="auth-switch">{mode === 'login' ? 'Need an account?' : 'Already have access?'} <Link to={mode === 'login' ? '/signup' : '/login'}>{mode === 'login' ? 'Create account' : 'Sign in'}</Link></p>
         </form>
       </section>

@@ -98,6 +98,17 @@ ALIASES = {
 
 BROAD_LOCAL_BUSINESS_CATEGORIES = "commercial,service,office,catering,healthcare,education,accommodation,sport"
 
+NAME_REQUIRED_SIGNALS: Dict[str, tuple[str, ...]] = {
+    "wedding hall": ("wedding", "marriage", "banquet", "marquee", "event hall"),
+    "banquet hall": ("banquet", "marquee", "wedding", "event hall"),
+    "software house": ("software", "technology", "technologies", "tech", "it solutions"),
+    "digital marketing agency": ("marketing", "digital", "advertising", "media"),
+    "marketing agency": ("marketing", "advertising", "media"),
+    "construction company": ("construction", "builder", "builders", "contractor"),
+    "event planner": ("event", "events", "planner"),
+    "photographer": ("photo", "photography", "studio"),
+}
+
 
 _contact_details_cache = TTLCache()
 
@@ -172,7 +183,7 @@ def geocode_city(client: httpx.Client, city: str, province: str) -> Dict[str, An
         client,
         f"{settings.geoapify_base_url.rstrip('/')}/v1/geocode/search",
         {
-            "text": f"{city}, {province}, Pakistan",
+            "text": ", ".join(part for part in [city, province, "Pakistan"] if str(part or "").strip()),
             "filter": "countrycode:pk",
             "type": "city",
             "limit": 1,
@@ -266,6 +277,8 @@ def _normalise_feature(feature: Dict[str, Any], keyword: str, city: str, provinc
         "contact_sources": ["Geoapify / OpenStreetMap"] if phone or email or website else [],
         "contact_confidence": "Medium" if phone or email else "Low",
         "contact_status": "Contactable" if phone or email else "Website available" if website else "Research needed",
+        "_provider_categories": props.get("categories") or [],
+        "_provider_tags": raw,
     }
 
 
@@ -384,6 +397,14 @@ def geoapify_search(keyword: str, city: str, province: str, limit: int, offset: 
         # For custom text searches, require a reasonable name match to improve precision.
         if key not in CATEGORY_MAP and key.casefold() not in item["business_name"].casefold():
             continue
+        # Some Geoapify categories are necessarily broad (for example event venues
+        # and generic company offices). Require a niche-specific name signal there
+        # so a Gym/Wedding Hall/Software search cannot be filled with unrelated POIs.
+        required_signals = NAME_REQUIRED_SIGNALS.get(key)
+        if required_signals:
+            name_text = item["business_name"].casefold()
+            if not any(signal in name_text for signal in required_signals):
+                continue
         dedupe_key = (item["business_name"].casefold(), (item.get("address") or "").casefold(), item.get("phone") or "")
         if dedupe_key in seen:
             continue

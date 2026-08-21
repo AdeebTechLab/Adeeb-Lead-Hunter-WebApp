@@ -24,6 +24,7 @@ from app.services.audit import UnsafeURL, audit_website
 from app.services.contact_enrichment import enrich_search_items, enrich_single_lead, finalise_contact_metadata
 from app.services.city_resolution import resolve_city
 from app.services.dedupe import make_dedupe_key, make_identity_keys
+from app.services.relevance import is_relevant_business, strip_provider_evidence
 from app.services.scoring import (
     build_outreach,
     build_score_breakdown,
@@ -155,6 +156,7 @@ def search_leads(payload: SearchRequest, user: dict = Depends(get_current_user))
     requested = max(1, payload.limit)
     city_resolution = resolve_city(payload.city, payload.province)
     search_city = str(city_resolution.get("city") or payload.city).strip()
+    search_province = str(city_resolution.get("province") or payload.province or "").strip()
     # Pull a wider live page than the UI request, then remove already-qualified
     # businesses before contact enrichment. This keeps a repeated search moving
     # forward without forcing the user to change the visible limit.
@@ -181,7 +183,7 @@ def search_leads(payload: SearchRequest, user: dict = Depends(get_current_user))
                 payload.provider,
                 payload.keyword,
                 search_city,
-                payload.province,
+                search_province,
                 page_size,
                 offset=provider_offset,
                 enrich=False,
@@ -218,6 +220,8 @@ def search_leads(payload: SearchRequest, user: dict = Depends(get_current_user))
         page_candidates: list[dict] = []
         page_keys: set[str] = set()
         for raw_item in raw_page:
+            if not is_relevant_business(raw_item, payload.keyword):
+                continue
             item = finalise_contact_metadata(raw_item)
             identity_keys = make_identity_keys(item)
             if not identity_keys:
@@ -259,7 +263,7 @@ def search_leads(payload: SearchRequest, user: dict = Depends(get_current_user))
         provider_offset += page_size
 
     used_provider = "+".join(dict.fromkeys(providers_used)) or payload.provider
-    selected_raw = prepared_raw[:requested]
+    selected_raw = [strip_provider_evidence(item) for item in prepared_raw[:requested]]
     if selected_raw:
         enriched_items, contact_warnings = enrich_search_items(selected_raw, used_provider)
         aggregate_warnings.extend(contact_warnings)
@@ -293,7 +297,10 @@ def search_leads(payload: SearchRequest, user: dict = Depends(get_current_user))
         "endpoint": " + ".join(dict.fromkeys(endpoints)),
         "pages_scanned": pages_scanned,
         "resolved_city": search_city,
+        "resolved_province": search_province,
         "city_corrected": bool(city_resolution.get("corrected")),
+        "requested_count": requested,
+        "source_exhausted": len(prepared) < requested,
     }
 
 

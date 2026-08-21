@@ -384,37 +384,56 @@ def _run_website_enrichment(results: List[dict], indexes: List[int]) -> None:
 
 
 def enrich_search_items(items: List[dict], provider: str) -> tuple[List[dict], List[str]]:
+    """Enrich already-discovered businesses without changing their identity.
+
+    Accuracy order:
+    1) exact Geoapify place-id details when available;
+    2) the business's own website;
+    3) TomTom Places v3 strict same-business match;
+    4) the newly discovered official website;
+    5) optional official Google Places when configured.
+
+    This keeps Geoapify/OpenStreetMap as discovery sources while making contact
+    coverage as complete as the public sources allow.
+    """
     results = [finalise_contact_metadata(item) for item in items]
     warnings: List[str] = []
+    enrichment_cap = min(len(results), max(30, settings.tomtom_contact_enrichment_limit, settings.website_contact_enrichment_limit, settings.geoapify_contact_details_limit))
 
-    # First use a website already supplied by Geoapify/OpenStreetMap. This can reveal
-    # public email/phone/social links without consuming another place-API request.
+    # Exact same-place lookup first. It has the strongest identity evidence and
+    # can avoid spending a TomTom request for contacts Geoapify already has.
+    if settings.geoapify_api_key:
+        indexes = [
+            index for index, item in enumerate(results)
+            if item.get("provider_place_id") and not (item.get("phone") and item.get("email") and item.get("website"))
+        ][:enrichment_cap]
+        if indexes:
+            with ThreadPoolExecutor(max_workers=min(4, len(indexes))) as executor:
+                futures = {executor.submit(geoapify_contact_lookup, results[index]): index for index in indexes}
+                for future in as_completed(futures):
+                    index = futures[future]
+                    try:
+                        details = future.result()
+                    except Exception:
+                        details = None
+                    if details:
+                        results[index] = finalise_contact_metadata(_merge_geoapify_details(results[index], details))
+
+    # Use official sites already known from the discovery/details records.
     if settings.enable_website_contact_enrichment:
         _run_website_enrichment(
             results,
-            _website_enrichment_indexes(results, settings.website_contact_enrichment_limit),
+            _website_enrichment_indexes(results, enrichment_cap),
         )
 
-    # TomTom is an optional free-tier enrichment layer only. The original discovery
-    # provider remains Geoapify/OpenStreetMap, and a TomTom result is accepted only
-    # when strict name + city/coordinate checks identify the same business.
-    tomtom_checked = 0
-    tomtom_matched = 0
+    # TomTom Places is contact enrichment only. It never overwrites a discovered
+    # business identity/location and is accepted only after strict matching.
     if settings.tomtom_api_key:
-        tomtom_indexes: List[int] = []
-        for index, item in enumerate(results):
-            if len(tomtom_indexes) >= max(0, settings.tomtom_contact_enrichment_limit):
-                break
-            # Details is useful when either a direct number OR an official site is
-            # missing. Skip only records that already have both.
-            if item.get("phone") and item.get("website"):
-                continue
-            tomtom_indexes.append(index)
-
-        tomtom_checked = len(tomtom_indexes)
+        tomtom_indexes = [
+            index for index, item in enumerate(results)
+            if not (item.get("phone") and item.get("website"))
+        ][:enrichment_cap]
         if tomtom_indexes:
-            # Each lookup owns its HTTP client; modest parallelism cuts a 12-20
-            # lead search from many serial round trips to a few short batches.
             with ThreadPoolExecutor(max_workers=min(4, len(tomtom_indexes))) as executor:
                 futures = {executor.submit(tomtom_exact_lookup, results[index]): index for index in tomtom_indexes}
                 for future in as_completed(futures):
@@ -425,55 +444,19 @@ def enrich_search_items(items: List[dict], provider: str) -> tuple[List[dict], L
                         match = None
                     if match:
                         results[index] = finalise_contact_metadata(_merge_tomtom(results[index], match))
-                        tomtom_matched += 1
 
-        # A TomTom match can supply the official website. Crawl that site once to
-        # find an email or a more authoritative phone number from the business itself.
-        if settings.enable_website_contact_enrichment and tomtom_matched:
+        # TomTom can reveal an official website; crawl it once for email/socials.
+        if settings.enable_website_contact_enrichment:
             _run_website_enrichment(
                 results,
-                _website_enrichment_indexes(results, settings.website_contact_enrichment_limit, only_uncrawled=True),
-            )
-    # Geoapify Place Details is a same-key, exact place-id fallback for cases
-    # where the normal Places result omitted phone/email even though the richer
-    # details record contains them. It is deliberately bounded because each
-    # details request costs more Geoapify credits than a normal Places search.
-    geo_details_checked = 0
-    geo_details_matched = 0
-    if settings.geoapify_api_key:
-        for index, item in enumerate(results):
-            if geo_details_checked >= max(0, settings.geoapify_contact_details_limit):
-                break
-            if item.get("phone") and item.get("email"):
-                continue
-            if not item.get("provider_place_id"):
-                continue
-            geo_details_checked += 1
-            try:
-                details = geoapify_contact_lookup(item)
-            except Exception:
-                details = None
-            if details:
-                before = (item.get("phone"), item.get("email"), item.get("website"))
-                results[index] = finalise_contact_metadata(_merge_geoapify_details(item, details))
-                after = (results[index].get("phone"), results[index].get("email"), results[index].get("website"))
-                if after != before:
-                    geo_details_matched += 1
-
-        # A details result can reveal the official website. Crawl it only for
-        # records still missing direct contact, keeping this bounded and public.
-        if settings.enable_website_contact_enrichment and geo_details_matched:
-            _run_website_enrichment(
-                results,
-                _website_enrichment_indexes(results, settings.website_contact_enrichment_limit, only_uncrawled=True),
+                _website_enrichment_indexes(results, enrichment_cap, only_uncrawled=True),
             )
 
-    # Google support remains optional and official-only. It is not required for the
-    # free deployment path and is skipped completely when no key is configured.
+    # Google remains optional and official-only. No key means zero Google API calls.
     if settings.google_places_api_key and provider != "google":
         lookups = 0
         for index, item in enumerate(results):
-            if lookups >= max(0, settings.google_contact_enrichment_limit):
+            if lookups >= enrichment_cap:
                 break
             if item.get("phone"):
                 continue
@@ -488,18 +471,11 @@ def enrich_search_items(items: List[dict], provider: str) -> tuple[List[dict], L
             except Exception:
                 google = None
             if google:
-                results[index] = _merge_google(item, google)
-        if lookups:
-            warnings.append("Missing contacts were checked against the official Google Places API where an accurate match was found.")
+                results[index] = finalise_contact_metadata(_merge_google(item, google))
 
-    if any(not (item.get("phone") or item.get("email")) for item in results):
-        if settings.tomtom_api_key:
-            warnings.append("Some businesses still do not publish a verifiable phone or email through Geoapify, TomTom Places, OpenStreetMap or their official website. Maps remains available for manual verification; no contact is invented.")
-        else:
-            warnings.append("Add a free TomTom Places Search API key to cross-check missing phone numbers and official websites while keeping Geoapify/OpenStreetMap as the lead sources.")
-
+    # Missing public contacts are represented per-row and are not treated as an
+    # application warning. Never invent or copy a nearby business's number.
     return [finalise_contact_metadata(item) for item in results], list(dict.fromkeys(warnings))
-
 
 def enrich_single_lead(item: Dict[str, Any]) -> tuple[Dict[str, Any], List[str]]:
     enriched = finalise_contact_metadata(item)
