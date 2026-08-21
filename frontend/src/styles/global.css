@@ -1064,12 +1064,15 @@ select:-webkit-autofill {
   transition: background-color 9999s ease-out 0s;
 }
 
-/* Final autofill theme protection */
-.auth-form input:-webkit-autofill,
-.auth-form input:-webkit-autofill:hover,
-.auth-form input:-webkit-autofill:focus {
+
+/* Browser autofill theme protection */
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus,
+input:-webkit-autofill:active {
+  -webkit-box-shadow: 0 0 0 1000px var(--card) inset !important;
+  box-shadow: 0 0 0 1000px var(--card) inset !important;
   -webkit-text-fill-color: var(--text) !important;
   caret-color: var(--text) !important;
-  -webkit-box-shadow: 0 0 0 1000px var(--input, var(--card)) inset !important;
-  box-shadow: 0 0 0 1000px var(--input, var(--card)) inset !important;
+  transition: background-color 9999s ease-out;
 }
