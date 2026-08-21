@@ -78,7 +78,35 @@ export default function DashboardPage() {
     setLoading(true)
     setError(null)
     api<DashboardData>(dashboardPath)
-      .then((result) => { if (active) setData(result) })
+      .then((result) => {
+        if (!active) return
+        const safeResult = {
+          ...result,
+          stats: {
+            total_leads: 0,
+            hot_leads: 0,
+            follow_ups: 0,
+            completed_deals: 0,
+            cancelled_deals: 0,
+            conversion_rate: 0,
+            new_this_week: 0,
+            scope: 'workspace',
+            ...(result?.stats || {})
+          },
+          period: {
+            mode: 'all',
+            label: 'All time',
+            trend_granularity: 'month',
+            ...(result?.period || {})
+          },
+          trend: Array.isArray(result?.trend) ? result.trend : [],
+          pipeline: Array.isArray(result?.pipeline) ? result.pipeline : [],
+          services: Array.isArray(result?.services) ? result.services : [],
+          recent_leads: Array.isArray(result?.recent_leads) ? result.recent_leads : [],
+          top_leads: Array.isArray(result?.top_leads) ? result.top_leads : [],
+        } as DashboardData
+        setData(safeResult)
+      }
       .catch((error) => { setError(error.message); toast.error(error.message) })
       .finally(() => { if (active) setLoading(false) })
     return () => { active = false }
@@ -158,8 +186,8 @@ export default function DashboardPage() {
           <div className="priority-list">
             {dashboardData.top_leads.map((lead) => (
               <button key={lead.id} onClick={() => setSelected(lead.id || null)}>
-                <div className={`mini-score score-${lead.priority.toLowerCase()}`}>{lead.lead_score}</div>
-                <div><strong>{lead.business_name}</strong><span>{lead.city} · {lead.recommended_service}{user?.role === 'admin' && lead.created_by_name ? ` · ${lead.created_by_name}` : ''}</span></div>
+                <div className={`mini-score score-${(lead.priority || 'cold').toLowerCase()}`}>{lead.lead_score}</div>
+                <div><strong>{lead.business_name || 'Unknown Business'}</strong><span>{lead.city || 'Unknown'} · {lead.recommended_service || 'General'}{user?.role === 'admin' && lead.created_by_name ? ` · ${lead.created_by_name}` : ''}</span></div>
                 <ArrowUpRight size={16} />
               </button>
             ))}
@@ -187,7 +215,7 @@ export default function DashboardPage() {
           <div className="table-wrap">
             <table>
               <thead><tr><th>Business</th><th>City</th>{user?.role === 'admin' && <th>Created by</th>}<th>Score</th><th>Service</th><th>Status</th></tr></thead>
-              <tbody>{dashboardData.recent_leads.map((lead) => <tr key={lead.id} onClick={() => setSelected(lead.id || null)}><td><strong>{lead.business_name}</strong><span>{lead.category}</span></td><td>{lead.city}</td>{user?.role === 'admin' && <td>{lead.created_by_name || 'Former user'}</td>}<td><StatusBadge value={lead.lead_score} /></td><td>{lead.recommended_service}</td><td><StatusBadge value={lead.status} /></td></tr>)}</tbody>
+              <tbody>{dashboardData.recent_leads.map((lead) => <tr key={lead.id} onClick={() => setSelected(lead.id || null)}><td><strong>{lead.business_name || 'Unknown Business'}</strong><span>{lead.category || 'Business'}</span></td><td>{lead.city}</td>{user?.role === 'admin' && <td>{lead.created_by_name || 'Former user'}</td>}<td><StatusBadge value={lead.lead_score} /></td><td>{lead.recommended_service || 'General'}</td><td><StatusBadge value={lead.status || 'New'} /></td></tr>)}</tbody>
             </table>
           </div>
         </section>
