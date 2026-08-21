@@ -1030,3 +1030,23 @@ input:-webkit-autofill:active {
 }
 .month-picker-control label { min-width: 160px; }
 .month-picker-control input { min-height: 38px !important; height: 38px; padding: 7px 9px; }
+
+/* Autofill color fix */
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus,
+textarea:-webkit-autofill,
+select:-webkit-autofill {
+  -webkit-text-fill-color: var(--text) !important;
+  -webkit-box-shadow: 0 0 0px 1000px var(--card) inset !important;
+  box-shadow: 0 0 0px 1000px var(--card) inset !important;
+  caret-color: var(--text) !important;
+  transition: background-color 9999s ease-in-out 0s;
+}
+
+.dashboard-error {
+  padding: 32px;
+}
+.dashboard-error button {
+  margin-top: 16px;
+}

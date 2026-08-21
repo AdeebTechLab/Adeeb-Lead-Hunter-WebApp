@@ -59,6 +59,7 @@ export default function DashboardPage() {
   const [toDate, setToDate] = useState(isoToday())
   const [monthValue, setMonthValue] = useState(isoMonth())
   const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
   const { refreshKey } = useRefresh()
   const { user } = useAuth()
 
@@ -75,14 +76,16 @@ export default function DashboardPage() {
   useEffect(() => {
     let active = true
     setLoading(true)
+    setError(null)
     api<DashboardData>(dashboardPath)
       .then((result) => { if (active) setData(result) })
-      .catch((error) => toast.error(error.message))
+      .catch((error) => { setError(error.message); toast.error(error.message) })
       .finally(() => { if (active) setLoading(false) })
     return () => { active = false }
   }, [dashboardPath, refreshKey])
 
-  if (!data) return <Loader />
+  if (!data && !error) return <Loader />
+  if (!data && error) return <section className="card dashboard-error"><h2>Unable to load dashboard</h2><p>{error}</p><button type="button" onClick={() => window.location.reload()}>Retry</button></section>
 
   const cards = [
     { label: 'Total leads', value: data.stats.total_leads, icon: UsersRound, note: `${data.stats.new_this_week} this week` },
